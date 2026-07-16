@@ -1,0 +1,26 @@
+[Unit]
+Description=pocket-term upload sink
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+ExecStart=__UPLOAD_SCRIPT__
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+ProtectSystem=strict
+# tmpfs (not read-only/true): hides the rest of $HOME behind an empty,
+# ephemeral mount while still letting BindPaths/BindReadOnlyPaths punch
+# through the two paths this service actually needs. read-only would leave
+# the whole home tree readable; true breaks BindReadOnlyPaths on a path
+# under the same protected tree entirely (verified in test-evidence.md).
+ProtectHome=tmpfs
+BindPaths=__UPLOAD_DIR__
+BindReadOnlyPaths=__CREDENTIALS_FILE__
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+# pocket-term gitignore
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.env
+credentials
+manifest.json
+*.swp
+*~
+.DS_Store
+uploads/
+.private-terms.local

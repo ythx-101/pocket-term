@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# pocket-term launch script template.
+# Variables: __PORT__ __COMMAND__ __INDEX__ __CREDENTIALS__ __THEME__
+set -euo pipefail
+
+PORT="__PORT__"
+COMMAND="__COMMAND__"
+INDEX="__INDEX__"
+CREDENTIALS="__CREDENTIALS__"
+THEME='__THEME__'
+
+# Read credentials for -c flag
+if [[ -f "$CREDENTIALS" ]]; then
+  CRED=$(head -1 "$CREDENTIALS" | tr -d '\n')
+else
+  echo "ERROR: credentials file not found: $CREDENTIALS" >&2
+  exit 1
+fi
+
+exec ttyd \
+  -i 127.0.0.1 \
+  -p "$PORT" \
+  -c "$CRED" \
+  -I "$INDEX" \
+  -t "disableLeaveAlert=true" \
+  -t "disableResizeOverlay=true" \
+  -t "fontFamily=Menlo, Consolas, DejaVu Sans Mono, monospace" \
+  -t "theme=${THEME}" \
+  "$COMMAND"

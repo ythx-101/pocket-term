@@ -1,0 +1,24 @@
+[Unit]
+Description=pocket-term web terminal
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__HOME__
+Environment=HOME=__HOME__
+Environment=PATH=__PATH__
+Environment=LANG=C.UTF-8
+ExecStart=__LAUNCH_SCRIPT__
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+
+# Mild sandbox: interactive shell needs full home/filesystem access.
+# Do NOT use ProtectHome= or ProtectSystem=strict — they break $SHELL.
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=default.target
