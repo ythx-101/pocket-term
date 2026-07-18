@@ -1,0 +1,9 @@
+{"type":"user","uuid":"u1","timestamp":"2026-07-01T10:00:00.000Z","message":{"role":"user","content":"请总结一下今日进度"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-07-01T10:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"好的，我先查看相关文件。"}]}}
+{"type":"assistant","uuid":"a2","timestamp":"2026-07-01T10:00:02.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"/tmp/demo/notes.txt"}}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-07-01T10:00:03.000Z","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":"note line one\nnote line two"}]}}
+{"type":"assistant","uuid":"a3","timestamp":"2026-07-01T10:00:04.000Z","message":{"role":"assistant","content":[{"type":"thinking","thinking":"internal plan only"},{"type":"text","text":"今日进度：脚手架已完成，准备进入气泡引擎。"}]}}
+{"type":"mode","mode":"default","sessionId":"sess-demo"}
+{"type":"ai-title","aiTitle":"Demo session","sessionId":"sess-demo"}
+{"type":"system","subtype":"api_error","content":"transient","level":"info","timestamp":"2026-07-01T10:00:05.000Z"}
+{"type":"last-prompt","lastPrompt":"请总结一下今日进度","sessionId":"sess-demo"}

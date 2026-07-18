@@ -1,0 +1,4 @@
+{"type":"user","uuid":"u1","timestamp":"2026-07-01T13:00:00.000Z","message":{"role":"user","content":"step one"}}
+{"type":"assistant","uuid":"a1","timestamp":"2026-07-01T13:00:01.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ack one"}]}}
+{"type":"user","uuid":"u2","timestamp":"2026-07-01T13:00:02.000Z","message":{"role":"user","content":"step two"}}
+{"type":"assistant","uuid":"a2","timestamp":"2026-07-01T13:00:03.000Z","message":{"role":"assistant","content":[{"type":"text","text":"ack two"}]}}
