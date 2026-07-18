@@ -1,0 +1,183 @@
+/**
+ * P3.2 review fixes: Tier A/B dedupe + clean shutdown.
+ */
+import { describe, it } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {
+  createStateManager,
+  shouldEmitTierB,
+} from '../lib/state-manager.js';
+
+describe('shouldEmitTierB / no A+B duplicate', () => {
+  it('suppresses Tier B when tier A or transcriptPath set', () => {
+    assert.equal(shouldEmitTierB({ tier: 'B', transcriptPath: null }), true);
+    assert.equal(shouldEmitTierB({ tier: 'A', transcriptPath: null }), false);
+    assert.equal(
+      shouldEmitTierB({
+        tier: 'B',
+        transcriptPath: '/root/.claude/projects/x/y.jsonl',
+      }),
+      false
+    );
+  });
+
+  it('ingestPaneOutput does not push stream bubbles when Tier A active', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-dedupe-'));
+    const sub = path.join(tmp, 'proj');
+    await fs.mkdir(sub, { recursive: true });
+    const id = 'cccccccc-dddd-eeee-ffff-000000000001';
+    const jsonl = path.join(sub, `${id}.jsonl`);
+    await fs.writeFile(
+      jsonl,
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: '2026-07-01T00:00:00.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'tier-a-only' }],
+        },
+      }) + '\n',
+      'utf8'
+    );
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+
+    let screenText = 'line-one\nline-two\n';
+    const client = {
+      rpc: async (method) => {
+        if (method === 'pane.read') {
+          return { type: 'pane_read', read: { text: screenText } };
+        }
+        throw new Error(`unexpected ${method}`);
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+
+    const mgr = createStateManager({
+      client,
+      stateDir,
+      allowedRoot: tmp,
+    });
+    try {
+      // Activate Tier A
+      await mgr._internal.resolvePaneTranscript({
+        pane_id: 'w1:p1',
+        agent_session: {
+          source: 'herdr:claude',
+          agent: 'claude',
+          kind: 'id',
+          value: id,
+        },
+      });
+      const rt = mgr._internal.ensureRuntime('w1:p1');
+      assert.equal(rt.tier, 'A');
+      assert.equal(shouldEmitTierB(rt), false);
+
+      // Seed prev empty so diff yields new lines
+      rt.prevText = '';
+      screenText = 'screen-only-line\nanother\n';
+      await mgr._internal.ingestPaneOutput('w1:p1');
+
+      const streamBubbles = rt.buffer.filter((b) => b.stream === true);
+      const agentBubbles = rt.buffer.filter(
+        (b) => b.role === 'agent' && b.stream !== true
+      );
+      assert.equal(streamBubbles.length, 0, 'no Tier B stream bubbles on Tier A');
+      assert.ok(
+        agentBubbles.some((b) => /tier-a-only/.test(b.text)),
+        'Tier A transcript messages present'
+      );
+      assert.equal(rt.openLines.length, 0);
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('clean stop awaits output loops', () => {
+  it('stop() aborts in-flight wait RPC and settles without hanging', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-stop-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+
+    let waitEntered = false;
+    /** @type {(() => void) | null} */
+    let releaseWait = null;
+
+    const client = {
+      rpc: async (method, _params, opts = {}) => {
+        if (method === 'ping') return { type: 'pong', protocol: 16 };
+        if (method === 'session.snapshot') {
+          return {
+            type: 'snapshot',
+            snapshot: {
+              panes: [
+                {
+                  pane_id: 'w1:p1',
+                  agent: 'grok',
+                  agent_status: 'idle',
+                  label: 't',
+                },
+              ],
+              workspaces: [],
+              tabs: [],
+            },
+          };
+        }
+        if (method === 'pane.read') {
+          return { type: 'pane_read', read: { text: 'x\n' } };
+        }
+        if (method === 'events.wait') {
+          waitEntered = true;
+          return new Promise((resolve, reject) => {
+            const onAbort = () => {
+              const err = new Error('aborted');
+              err.code = 'aborted';
+              reject(err);
+            };
+            if (opts.signal?.aborted) {
+              onAbort();
+              return;
+            }
+            opts.signal?.addEventListener('abort', onAbort, { once: true });
+            // Also allow manual release (should not be needed if abort works)
+            releaseWait = () => {
+              const err = new Error('timeout');
+              err.code = 'timeout';
+              reject(err);
+            };
+            // Long hang if abort broken
+            setTimeout(() => {
+              const err = new Error('timeout');
+              err.code = 'timeout';
+              reject(err);
+            }, 60_000).unref?.();
+          });
+        }
+        throw new Error(`unexpected ${method}`);
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    const t0 = Date.now();
+    await mgr.start();
+    // Wait until output loop enters events.wait
+    for (let i = 0; i < 50 && !waitEntered; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(waitEntered, 'output loop should call events.wait');
+    assert.ok(mgr._internal.outputLoops.size >= 1);
+
+    await mgr.stop();
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 5000, `stop should be quick, took ${elapsed}ms`);
+    assert.equal(mgr._internal.outputLoops.size, 0);
+    void releaseWait;
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+});

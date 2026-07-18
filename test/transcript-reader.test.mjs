@@ -59,8 +59,24 @@ describe('transcript-reader path safety', () => {
     const bad = path.join(ALLOWED, '..', '..', 'package.json');
     await assert.rejects(
       () => readMessages(bad, { allowedRoot: ALLOWED }),
-      (err) => err && /path|allow|escape|root/i.test(err.message)
+      (err) => err && /path|allow|escape|root|\.\./i.test(err.message)
     );
+  });
+
+  it('rejects .. segments even when they stay inside allowedRoot', async () => {
+    // Do not use path.join — it normalizes away '..'. Keep raw segments.
+    const sneaky = `${ALLOWED}${path.sep}session-a${path.sep}..${path.sep}session-a${path.sep}basic.jsonl`;
+    assert.ok(sneaky.includes(`${path.sep}..${path.sep}`));
+    await assert.rejects(
+      () => readMessages(sneaky, { allowedRoot: ALLOWED }),
+      (err) =>
+        err &&
+        (err.code === 'path_escape' || /\.\.|escape|path/i.test(err.message))
+    );
+    // Control: same file without .. is fine
+    const ok = path.join(ALLOWED, 'session-a', 'basic.jsonl');
+    const res = await readMessages(ok, { allowedRoot: ALLOWED });
+    assert.ok(res.messages.length > 0);
   });
 
   it('rejects absolute path outside allowedRoot', async () => {

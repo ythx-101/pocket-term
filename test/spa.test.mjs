@@ -19,6 +19,7 @@ import {
   groupContacts,
   parseRoute,
   sseBackoffMs,
+  refetchAfterSseReconnect,
 } from '../public/spa-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -158,6 +159,38 @@ describe('spa pure: avatar / status / route / contacts', () => {
     assert.equal(sseBackoffMs(1), 2000);
     assert.equal(sseBackoffMs(2), 5000);
     assert.equal(sseBackoffMs(9), 5000);
+  });
+
+  it('refetchAfterSseReconnect reloads state and open chat messages', async () => {
+    const calls = [];
+    const result = await refetchAfterSseReconnect({
+      fetchState: async () => {
+        calls.push('state');
+        return { panes: [{ pane_id: 'w9:p8' }], herdr: 'connected' };
+      },
+      applyState: async (s) => {
+        calls.push(`apply:${s.herdr}`);
+      },
+      activePaneId: 'w9:p8',
+      reloadMessages: async (id) => {
+        calls.push(`messages:${id}`);
+      },
+    });
+    assert.deepEqual(result, {
+      stateRefetched: true,
+      messagesPaneId: 'w9:p8',
+    });
+    assert.deepEqual(calls, ['state', 'apply:connected', 'messages:w9:p8']);
+
+    const noChat = await refetchAfterSseReconnect({
+      fetchState: async () => ({ panes: [] }),
+      applyState: () => {},
+      activePaneId: null,
+      reloadMessages: async () => {
+        throw new Error('should not reload messages');
+      },
+    });
+    assert.equal(noChat.messagesPaneId, null);
   });
 });
 

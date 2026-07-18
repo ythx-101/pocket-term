@@ -239,3 +239,33 @@ export function sseBackoffMs(attempt) {
   if (n === 1) return 2000;
   return 5000;
 }
+
+/**
+ * After EventSource reconnects, refetch state + current chat messages (P3 spec).
+ * Pure orchestration hook — injectable deps for node --test.
+ *
+ * @param {{
+ *   fetchState: () => Promise<object>,
+ *   applyState: (state: object) => void|Promise<void>,
+ *   activePaneId?: string|null,
+ *   reloadMessages?: (paneId: string) => Promise<void>,
+ * }} deps
+ * @returns {Promise<{ stateRefetched: boolean, messagesPaneId: string|null }>}
+ */
+export async function refetchAfterSseReconnect(deps) {
+  if (!deps || typeof deps.fetchState !== 'function') {
+    throw new Error('fetchState required');
+  }
+  const state = await deps.fetchState();
+  if (typeof deps.applyState === 'function') {
+    await deps.applyState(state);
+  }
+  const paneId = deps.activePaneId || null;
+  if (paneId && typeof deps.reloadMessages === 'function') {
+    await deps.reloadMessages(paneId);
+  }
+  return {
+    stateRefetched: true,
+    messagesPaneId: paneId,
+  };
+}

@@ -11,6 +11,7 @@ import {
   groupContacts,
   parseRoute,
   sseBackoffMs,
+  refetchAfterSseReconnect,
 } from './spa-utils.js';
 
 const APP_VERSION = '0.0.1';
@@ -514,6 +515,15 @@ function connectSse() {
   es.addEventListener('open', () => {
     sseAttempt = 0;
     setConn('ok', '已连接');
+    // Spec: on reconnect, re-pull state + open chat messages (not only wait for SSE).
+    refetchAfterSseReconnect({
+      fetchState,
+      applyState,
+      activePaneId,
+      reloadMessages: (paneId) => loadChatMessages(paneId, { reset: true }),
+    }).catch(() => {
+      /* keep stream; next state event may heal */
+    });
   });
 
   es.addEventListener('state', async (ev) => {
