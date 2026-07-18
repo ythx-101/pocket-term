@@ -98,6 +98,159 @@ describe('shouldEmitTierB / no A+B duplicate', () => {
   });
 });
 
+describe('B→A transition purges sealed Tier B buffer', () => {
+  it('leaves zero stream bubbles after successful Tier A resolve', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-ba-'));
+    const sub = path.join(tmp, 'proj');
+    await fs.mkdir(sub, { recursive: true });
+    const id = 'dddddddd-eeee-ffff-aaaa-111111111111';
+    const jsonl = path.join(sub, `${id}.jsonl`);
+    await fs.writeFile(
+      jsonl,
+      JSON.stringify({
+        type: 'assistant',
+        timestamp: '2026-07-01T00:00:00.000Z',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text: 'from-transcript' }],
+        },
+      }) + '\n',
+      'utf8'
+    );
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+
+    const mgr = createStateManager({
+      client: {
+        rpc: async () => {
+          throw new Error('no rpc');
+        },
+        subscribe: () => ({ dead: false, close() {} }),
+      },
+      stateDir,
+      allowedRoot: tmp,
+    });
+    try {
+      const paneId = 'w1:p9';
+      // Simulate Tier B history already sealed into the ring buffer
+      mgr._internal.pushBubble(paneId, {
+        ts: 1,
+        text: 'old screen card',
+        role: 'agent',
+        stream: true,
+      });
+      mgr._internal.pushBubble(paneId, {
+        ts: 2,
+        text: 'another stream',
+        role: 'agent',
+        stream: true,
+      });
+      mgr._internal.appendTierBLines(paneId, ['open draft'], 3);
+      const rtBefore = mgr._internal.ensureRuntime(paneId);
+      assert.equal(rtBefore.tier, 'B');
+      assert.ok(rtBefore.buffer.some((b) => b.stream));
+      assert.ok(rtBefore.openLines.length > 0);
+
+      await mgr._internal.resolvePaneTranscript({
+        pane_id: paneId,
+        agent_session: {
+          source: 'herdr:claude',
+          agent: 'claude',
+          kind: 'id',
+          value: id,
+        },
+      });
+
+      const rt = mgr._internal.ensureRuntime(paneId);
+      assert.equal(rt.tier, 'A');
+      assert.equal(
+        rt.buffer.filter((b) => b.stream === true).length,
+        0,
+        'all stream bubbles purged on B→A'
+      );
+      assert.equal(rt.openLines.length, 0);
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('stop() with mid-flight snapshot', () => {
+  it('aborts and awaits in-flight session.snapshot cleanly', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-snap-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+
+    let snapshotEntered = false;
+    let snapshotSettled = false;
+    let sawAbortSignal = false;
+
+    const emptySnap = {
+      type: 'snapshot',
+      snapshot: { panes: [], workspaces: [], tabs: [] },
+    };
+
+    const client = {
+      // Non-async so the tracked promise is the same object we hang/abort.
+      rpc(method, _params, opts = {}) {
+        if (method === 'ping') {
+          return Promise.resolve({ type: 'pong', protocol: 16 });
+        }
+        if (method === 'session.snapshot') {
+          snapshotEntered = true;
+          return new Promise((resolve) => {
+            const finish = () => {
+              snapshotSettled = true;
+              resolve(emptySnap);
+            };
+            const onAbort = () => {
+              sawAbortSignal = true;
+              // Complete the RPC on abort (mirrors socket destroy + settle).
+              finish();
+            };
+            if (opts.signal?.aborted) {
+              onAbort();
+              return;
+            }
+            opts.signal?.addEventListener('abort', onAbort, { once: true });
+            // Without stop(), this would hang past the test timeout.
+          });
+        }
+        if (method === 'pane.read') {
+          return Promise.resolve({ type: 'pane_read', read: { text: '' } });
+        }
+        if (method === 'events.wait') {
+          const err = new Error('timeout');
+          err.code = 'timeout';
+          return Promise.reject(err);
+        }
+        return Promise.reject(new Error(`unexpected ${method}`));
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    const startP = mgr.start();
+    for (let i = 0; i < 50 && !snapshotEntered; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+    }
+    assert.ok(snapshotEntered, 'snapshot RPC should have started');
+    assert.ok(mgr._internal.inFlightSnapshots.size >= 1);
+    assert.equal(snapshotSettled, false);
+
+    const t0 = Date.now();
+    await mgr.stop();
+    await startP;
+    const elapsed = Date.now() - t0;
+    assert.ok(elapsed < 3000, `stop should finish quickly, took ${elapsed}ms`);
+    assert.ok(sawAbortSignal, 'snapshot RPC should observe AbortSignal');
+    assert.ok(snapshotSettled, 'in-flight snapshot must settle before stop returns');
+    assert.equal(mgr._internal.inFlightSnapshots.size, 0);
+    await fs.rm(tmp, { recursive: true, force: true });
+  });
+});
+
 describe('seedInitialPaneState', () => {
   it('fills Tier B summary and last_activity from first pane.read', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-seed-'));
