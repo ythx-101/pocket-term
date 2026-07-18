@@ -185,11 +185,12 @@ describe('stop() with mid-flight snapshot', () => {
     let snapshotEntered = false;
     let snapshotSettled = false;
     let sawAbortSignal = false;
-
-    const emptySnap = {
-      type: 'snapshot',
-      snapshot: { panes: [], workspaces: [], tabs: [] },
+    /** @type {unknown[]} */
+    const unhandled = [];
+    const onUnhandled = (err) => {
+      unhandled.push(err);
     };
+    process.on('unhandledRejection', onUnhandled);
 
     const client = {
       // Non-async so the tracked promise is the same object we hang/abort.
@@ -199,22 +200,20 @@ describe('stop() with mid-flight snapshot', () => {
         }
         if (method === 'session.snapshot') {
           snapshotEntered = true;
-          return new Promise((resolve) => {
-            const finish = () => {
-              snapshotSettled = true;
-              resolve(emptySnap);
-            };
+          return new Promise((resolve, reject) => {
             const onAbort = () => {
               sawAbortSignal = true;
-              // Complete the RPC on abort (mirrors socket destroy + settle).
-              finish();
+              const err = new Error('aborted');
+              err.code = 'aborted';
+              // Real herdr-client path: destroy socket → reject aborted
+              reject(err);
+              snapshotSettled = true;
             };
             if (opts.signal?.aborted) {
               onAbort();
               return;
             }
             opts.signal?.addEventListener('abort', onAbort, { once: true });
-            // Without stop(), this would hang past the test timeout.
           });
         }
         if (method === 'pane.read') {
@@ -231,23 +230,35 @@ describe('stop() with mid-flight snapshot', () => {
     };
 
     const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
-    const startP = mgr.start();
-    for (let i = 0; i < 50 && !snapshotEntered; i++) {
-      await new Promise((r) => setTimeout(r, 20));
-    }
-    assert.ok(snapshotEntered, 'snapshot RPC should have started');
-    assert.ok(mgr._internal.inFlightSnapshots.size >= 1);
-    assert.equal(snapshotSettled, false);
+    try {
+      const startP = mgr.start();
+      for (let i = 0; i < 50 && !snapshotEntered; i++) {
+        await new Promise((r) => setTimeout(r, 20));
+      }
+      assert.ok(snapshotEntered, 'snapshot RPC should have started');
+      assert.ok(mgr._internal.inFlightSnapshots.size >= 1);
 
-    const t0 = Date.now();
-    await mgr.stop();
-    await startP;
-    const elapsed = Date.now() - t0;
-    assert.ok(elapsed < 3000, `stop should finish quickly, took ${elapsed}ms`);
-    assert.ok(sawAbortSignal, 'snapshot RPC should observe AbortSignal');
-    assert.ok(snapshotSettled, 'in-flight snapshot must settle before stop returns');
-    assert.equal(mgr._internal.inFlightSnapshots.size, 0);
-    await fs.rm(tmp, { recursive: true, force: true });
+      const t0 = Date.now();
+      await mgr.stop();
+      await startP;
+      // Allow any stray rejection microtasks to surface
+      await new Promise((r) => setImmediate(r));
+      await new Promise((r) => setImmediate(r));
+
+      const elapsed = Date.now() - t0;
+      assert.ok(elapsed < 3000, `stop should finish quickly, took ${elapsed}ms`);
+      assert.ok(sawAbortSignal, 'snapshot RPC should observe AbortSignal');
+      assert.ok(snapshotSettled, 'in-flight snapshot must settle before stop returns');
+      assert.equal(mgr._internal.inFlightSnapshots.size, 0);
+      assert.equal(
+        unhandled.length,
+        0,
+        `no unhandledRejection expected, got: ${unhandled.map((e) => e && e.message).join('; ')}`
+      );
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
   });
 });
 
