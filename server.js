@@ -50,11 +50,12 @@ function sendText(res, status, text, type = 'text/plain; charset=utf-8') {
 }
 
 /**
- * Resolve a static path under public/, rejecting traversal.
+ * Resolve a static path under public/, rejecting traversal and symlink escape.
  * @param {string} urlPath pathname starting with /herd
- * @returns {{ ok: true, file: string } | { ok: false, status: number }}
+ * @param {string} [publicDir]
+ * @returns {Promise<{ ok: true, file: string } | { ok: false, status: number }>}
  */
-function resolveStatic(urlPath) {
+export async function resolveStatic(urlPath, publicDir = PUBLIC_DIR) {
   // Reject raw traversal tokens before URL normalization tricks.
   if (urlPath.includes('..') || urlPath.includes('\\') || urlPath.includes('\0')) {
     return { ok: false, status: 403 };
@@ -71,15 +72,32 @@ function resolveStatic(urlPath) {
     return { ok: false, status: 403 };
   }
 
-  const publicRoot = path.resolve(PUBLIC_DIR);
-  const file = path.resolve(publicRoot, rel);
+  let publicRoot;
+  try {
+    publicRoot = path.resolve(await fs.realpath(publicDir));
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  const candidate = path.resolve(publicRoot, rel);
   const prefix = publicRoot.endsWith(path.sep)
     ? publicRoot
     : publicRoot + path.sep;
-  if (file !== publicRoot && !file.startsWith(prefix)) {
+  // Lexical check before realpath (cheap reject).
+  if (candidate !== publicRoot && !candidate.startsWith(prefix)) {
     return { ok: false, status: 403 };
   }
-  return { ok: true, file };
+
+  // realpath collapses symlinks — must still sit under publicRoot.
+  let realFile;
+  try {
+    realFile = path.resolve(await fs.realpath(candidate));
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  if (realFile !== publicRoot && !realFile.startsWith(prefix)) {
+    return { ok: false, status: 403 };
+  }
+  return { ok: true, file: realFile };
 }
 
 /**
@@ -97,7 +115,6 @@ export async function startServer(options = {}) {
   const port = Number(options.port ?? process.env.PT2_PORT ?? 7690);
   const stateDir = options.stateDir ?? STATE_DIR;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
-  void publicDir; // resolveStatic uses module PUBLIC_DIR; tests share same tree
 
   const client =
     options.client ??
@@ -201,7 +218,7 @@ export async function startServer(options = {}) {
       const checkPath = rawPath.includes('..') ? rawPath : pathname;
       if (checkPath.startsWith('/herd') || rawPath.startsWith('/herd')) {
         const targetPath = rawPath.includes('..') ? rawPath : pathname;
-        const resolved = resolveStatic(targetPath);
+        const resolved = await resolveStatic(targetPath, publicDir);
         if (!resolved.ok) {
           sendText(res, resolved.status, resolved.status === 403 ? 'forbidden' : 'not found');
           return;

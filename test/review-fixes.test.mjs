@@ -98,6 +98,64 @@ describe('shouldEmitTierB / no A+B duplicate', () => {
   });
 });
 
+describe('seedInitialPaneState', () => {
+  it('fills Tier B summary and last_activity from first pane.read', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-seed-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+
+    const client = {
+      rpc: async (method) => {
+        if (method === 'ping') return { type: 'pong', protocol: 16 };
+        if (method === 'session.snapshot') {
+          return {
+            type: 'snapshot',
+            snapshot: {
+              panes: [
+                {
+                  pane_id: 'w1:p1',
+                  agent: 'grok',
+                  agent_status: 'idle',
+                  label: 'seed-me',
+                },
+              ],
+              workspaces: [],
+              tabs: [],
+            },
+          };
+        }
+        if (method === 'pane.read') {
+          return {
+            type: 'pane_read',
+            read: { text: 'noise\n\n最终摘要行\n' },
+          };
+        }
+        if (method === 'events.wait') {
+          const err = new Error('timeout');
+          err.code = 'timeout';
+          throw err;
+        }
+        throw new Error(`unexpected ${method}`);
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    try {
+      await mgr.start();
+      const pane = mgr.getState().panes.find((p) => p.pane_id === 'w1:p1');
+      assert.ok(pane);
+      assert.match(pane.summary || '', /最终摘要行/);
+      assert.ok(pane.last_activity > 0);
+      const rt = mgr._internal.ensureRuntime('w1:p1');
+      assert.match(rt.prevText, /最终摘要行/);
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('clean stop awaits output loops', () => {
   it('stop() aborts in-flight wait RPC and settles without hanging', async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-stop-'));

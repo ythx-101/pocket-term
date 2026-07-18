@@ -181,4 +181,21 @@ describe('bridge static safety', () => {
     const res = await fetch(`${base}/herd/api/nope`);
     assert.equal(res.status, 404);
   });
+
+  it('rejects static symlink that escapes public/', async () => {
+    const { resolveStatic } = await import('../server.js');
+    const pub = path.join(ROOT, 'public');
+    const link = path.join(pub, `evil-static-${process.pid}.css`);
+    const outside = path.join(os.tmpdir(), `pt2-outside-${process.pid}.css`);
+    await fs.writeFile(outside, 'body{color:red}', 'utf8');
+    try {
+      await fs.symlink(outside, link);
+      const resolved = await resolveStatic('/herd/evil-static-' + process.pid + '.css', pub);
+      assert.equal(resolved.ok, false);
+      assert.ok(resolved.status === 403 || resolved.status === 404);
+    } finally {
+      await fs.unlink(link).catch(() => {});
+      await fs.unlink(outside).catch(() => {});
+    }
+  });
 });
