@@ -1,34 +1,166 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN" data-theme="dark" data-font="md">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>pocket-term-2</title>
-    <style>
-      body {
-        margin: 0;
-        font-family: system-ui, sans-serif;
-        background: #111;
-        color: #eee;
-        display: grid;
-        place-items: center;
-        min-height: 100vh;
-      }
-      main {
-        max-width: 28rem;
-        padding: 1.5rem;
-        text-align: center;
-      }
-      code {
-        color: #8cf;
-      }
-    </style>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <meta name="color-scheme" content="dark light" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <title>pocket term</title>
+    <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <main>
-      <h1>pocket-term-2</h1>
-      <p>Bridge is up. Chat SPA arrives in P3.</p>
-      <p><code>GET /herd/api/state</code></p>
-    </main>
+    <div id="app">
+      <!-- wallpaper + dim under chat bubbles (M2 hooks) -->
+      <div id="wallpaper" aria-hidden="true"></div>
+      <div id="dim" aria-hidden="true"></div>
+
+      <div id="banner-herdr" class="banner hidden" role="status">
+        herdr 已断开 · 正在重连…
+      </div>
+
+      <!-- 会话列表 -->
+      <section id="view-chats" class="view" data-view="chats">
+        <header class="topbar">
+          <h1 class="topbar-title">pocket term</h1>
+          <button
+            type="button"
+            id="conn-led"
+            class="conn-led"
+            title="连接状态"
+            aria-label="连接状态：未知"
+          ></button>
+        </header>
+        <div id="chat-list" class="list scroll" role="list"></div>
+      </section>
+
+      <!-- 对话页 -->
+      <section id="view-chat" class="view hidden" data-view="chat">
+        <header class="topbar chat-topbar">
+          <button type="button" id="btn-back" class="icon-btn" aria-label="返回">
+            ←
+          </button>
+          <div class="chat-title-wrap">
+            <span id="chat-title" class="topbar-title">会话</span>
+            <span
+              id="chat-status-dot"
+              class="status-dot st-unknown"
+              aria-label="未知"
+            ></span>
+          </div>
+          <a
+            id="btn-terminal"
+            class="text-btn"
+            href="/"
+            target="_blank"
+            rel="noopener"
+            >终端</a
+          >
+        </header>
+        <div id="blocked-bar" class="blocked-bar hidden" role="status">
+          等你回复
+        </div>
+        <div id="bubble-scroll" class="bubble-scroll scroll">
+          <div id="load-earlier" class="load-earlier hidden">
+            <button type="button" id="btn-load-earlier" class="text-btn">
+              加载更早消息
+            </button>
+          </div>
+          <div id="bubble-list" class="bubble-list"></div>
+        </div>
+        <button type="button" id="btn-jump-bottom" class="jump-bottom hidden">
+          ↓ 新消息
+        </button>
+        <footer class="readonly-bar">只读模式 · M1 开放发送</footer>
+      </section>
+
+      <!-- 通讯录 -->
+      <section id="view-contacts" class="view hidden" data-view="contacts">
+        <header class="topbar">
+          <h1 class="topbar-title">通讯录</h1>
+        </header>
+        <div id="contact-list" class="list scroll" role="list"></div>
+      </section>
+
+      <!-- 我 -->
+      <section id="view-me" class="view hidden" data-view="me">
+        <header class="topbar">
+          <h1 class="topbar-title">我</h1>
+        </header>
+        <div class="settings scroll">
+          <div class="settings-group">
+            <div class="settings-label">主题</div>
+            <div class="seg" role="group" aria-label="主题">
+              <button type="button" class="seg-btn" data-theme-set="dark">
+                深色
+              </button>
+              <button type="button" class="seg-btn" data-theme-set="light">
+                浅色
+              </button>
+            </div>
+          </div>
+          <div class="settings-group">
+            <div class="settings-label">聊天背景</div>
+            <div class="wallpaper-placeholder">
+              <span>壁纸 · 即将上线</span>
+              <label class="dim-row">
+                <span>暗化</span>
+                <input
+                  id="dim-slider"
+                  type="range"
+                  min="0"
+                  max="80"
+                  value="35"
+                  disabled
+                  aria-label="壁纸暗化（即将上线）"
+                />
+              </label>
+            </div>
+          </div>
+          <div class="settings-group">
+            <div class="settings-label">字号</div>
+            <div class="seg" role="group" aria-label="字号">
+              <button type="button" class="seg-btn" data-font-set="sm">
+                小
+              </button>
+              <button type="button" class="seg-btn" data-font-set="md">
+                标准
+              </button>
+              <button type="button" class="seg-btn" data-font-set="lg">
+                大
+              </button>
+            </div>
+          </div>
+          <div class="settings-group about">
+            <div class="settings-label">关于</div>
+            <p>pocket-term-2 · v<span id="app-version">0.0.1</span></p>
+            <p>
+              <a href="./api/state" target="_blank" rel="noopener"
+                >调试：/herd/api/state</a
+              >
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <nav id="tab-bar" class="tab-bar" aria-label="主导航">
+        <a href="#/chats" class="tab" data-tab="chats">
+          <span class="tab-icon">💬</span>
+          <span>会话</span>
+        </a>
+        <a href="#/contacts" class="tab" data-tab="contacts">
+          <span class="tab-icon">📒</span>
+          <span>通讯录</span>
+        </a>
+        <a href="#/me" class="tab" data-tab="me">
+          <span class="tab-icon">👤</span>
+          <span>我</span>
+        </a>
+      </nav>
+    </div>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

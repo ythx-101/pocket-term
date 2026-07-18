@@ -1,0 +1,644 @@
+/**
+ * pocket-term-2 chat SPA — zero-build, hash-routed.
+ */
+import {
+  formatRelativeTime,
+  sortPanes,
+  mapBubbleToView,
+  agentAvatar,
+  statusMeta,
+  paneTitle,
+  groupContacts,
+  parseRoute,
+  sseBackoffMs,
+} from './spa-utils.js';
+
+const APP_VERSION = '0.0.1';
+const LS_THEME = 'pt2-theme';
+const LS_FONT = 'pt2-font';
+const LS_DIM = 'pt2-dim';
+
+/** API base: /herd when served under /herd/ */
+function apiBase() {
+  const p = location.pathname.replace(/\/index\.html$/i, '');
+  if (p.endsWith('/herd')) return '/herd';
+  if (p.includes('/herd/')) {
+    const i = p.indexOf('/herd');
+    return p.slice(0, i + '/herd'.length);
+  }
+  // Dev fallback if opened oddly
+  return p.endsWith('/') ? p.slice(0, -1) || '' : p || '';
+}
+
+const BASE = apiBase();
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+function el(tag, attrs = {}, children = []) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === 'className') node.className = v;
+    else if (k === 'text') node.textContent = v;
+    else if (k === 'html') node.innerHTML = v;
+    else if (k.startsWith('on') && typeof v === 'function') {
+      node.addEventListener(k.slice(2).toLowerCase(), v);
+    } else if (v === false || v == null) {
+      /* skip */
+    } else if (v === true) {
+      node.setAttribute(k, '');
+    } else {
+      node.setAttribute(k, String(v));
+    }
+  }
+  for (const c of [].concat(children)) {
+    if (c == null) continue;
+    node.append(typeof c === 'string' ? document.createTextNode(c) : c);
+  }
+  return node;
+}
+
+/** @type {object|null} */
+let state = null;
+/** @type {string|null} */
+let activePaneId = null;
+/** @type {Map<string, object>} */
+const bubbleStore = new Map(); // paneId -> { items: [], oldestTs }
+/** @type {EventSource|null} */
+let es = null;
+let sseAttempt = 0;
+let sseTimer = null;
+let connMode = 'unknown'; // ok | warn | err | unknown
+let stickToBottom = true;
+let loadingEarlier = false;
+
+// —— settings ——
+function loadSettings() {
+  const theme = localStorage.getItem(LS_THEME) || 'dark';
+  const font = localStorage.getItem(LS_FONT) || 'md';
+  const dim = localStorage.getItem(LS_DIM) || '35';
+  document.documentElement.setAttribute('data-theme', theme);
+  document.documentElement.setAttribute('data-font', font);
+  document.documentElement.style.setProperty(
+    '--wallpaper-dim',
+    String(Number(dim) / 100)
+  );
+  const slider = $('#dim-slider');
+  if (slider) slider.value = dim;
+  $$('.seg-btn[data-theme-set]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.themeSet === theme);
+  });
+  $$('.seg-btn[data-font-set]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.fontSet === font);
+  });
+  const ver = $('#app-version');
+  if (ver) ver.textContent = APP_VERSION;
+}
+
+function setTheme(theme) {
+  localStorage.setItem(LS_THEME, theme);
+  loadSettings();
+}
+function setFont(font) {
+  localStorage.setItem(LS_FONT, font);
+  loadSettings();
+}
+
+// —— connection LED ——
+function setConn(mode, label) {
+  connMode = mode;
+  const led = $('#conn-led');
+  if (!led) return;
+  led.classList.remove('ok', 'warn', 'err');
+  if (mode === 'ok' || mode === 'warn' || mode === 'err') {
+    led.classList.add(mode);
+  }
+  led.setAttribute('aria-label', `连接状态：${label}`);
+  led.title = label;
+}
+
+// —— fetch helpers ——
+async function fetchState() {
+  const res = await fetch(`${BASE}/api/state`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`state ${res.status}`);
+  return res.json();
+}
+
+async function fetchMessages(paneId, { before, limit = 40 } = {}) {
+  const q = new URLSearchParams();
+  if (before != null) q.set('before', String(before));
+  q.set('limit', String(limit));
+  const res = await fetch(
+    `${BASE}/api/pane/${encodeURIComponent(paneId)}/messages?${q}`,
+    { cache: 'no-store' }
+  );
+  if (!res.ok) throw new Error(`messages ${res.status}`);
+  return res.json();
+}
+
+async function postSeen(paneId) {
+  if (!paneId) return;
+  try {
+    await fetch(`${BASE}/api/seen/${encodeURIComponent(paneId)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+// —— list rendering ——
+function renderChatList() {
+  const root = $('#chat-list');
+  if (!root) return;
+  root.replaceChildren();
+  const panes = sortPanes(state?.panes || []);
+  if (!panes.length) {
+    root.append(el('div', { className: 'empty', text: '暂无会话' }));
+    return;
+  }
+  const now = Date.now();
+  for (const p of panes) {
+    const av = agentAvatar(p.agent);
+    const st = statusMeta(p.agent_status);
+    const title = paneTitle(p);
+    const row = el('a', {
+      className: 'row',
+      href: `#/chat/${encodeURIComponent(p.pane_id)}`,
+      role: 'listitem',
+    });
+    const avatar = el('div', {
+      className: 'avatar',
+      text: av.letter,
+      style: `background:${av.color}`,
+      title: p.agent || '',
+    });
+    avatar.append(
+      el('span', {
+        className: `status-dot ${st.cls}`,
+        'aria-label': st.label,
+      })
+    );
+    const main = el('div', { className: 'row-main' }, [
+      el('div', { className: 'row-title', text: title }),
+      el('div', {
+        className: 'row-summary',
+        text: p.summary || '暂无摘要',
+      }),
+    ]);
+    const meta = el('div', { className: 'row-meta' }, [
+      el('div', {
+        className: 'row-time',
+        text: formatRelativeTime(p.last_activity, now),
+      }),
+      p.unread ? el('div', { className: 'unread-dot', 'aria-label': '未读' }) : null,
+    ]);
+    row.append(avatar, main, meta);
+    root.append(row);
+  }
+}
+
+function renderContacts() {
+  const root = $('#contact-list');
+  if (!root) return;
+  root.replaceChildren();
+  const groups = groupContacts(state?.panes || []);
+  if (!groups.length) {
+    root.append(el('div', { className: 'empty', text: '暂无联系人' }));
+    return;
+  }
+  for (const ws of groups) {
+    root.append(
+      el('div', {
+        className: 'group-head',
+        text: `${ws.workspace_label} · ${ws.pane_count} 个会话`,
+      })
+    );
+    for (const tab of ws.tabs) {
+      root.append(
+        el('div', {
+          className: 'group-sub',
+          text: `标签 ${tab.tab_label}（${tab.pane_count}）`,
+        })
+      );
+      for (const p of tab.panes) {
+        const av = agentAvatar(p.agent);
+        const st = statusMeta(p.agent_status);
+        const row = el('a', {
+          className: 'row',
+          href: `#/chat/${encodeURIComponent(p.pane_id)}`,
+          role: 'listitem',
+        });
+        const avatar = el('div', {
+          className: 'avatar',
+          text: av.letter,
+          style: `background:${av.color}`,
+        });
+        avatar.append(
+          el('span', {
+            className: `status-dot ${st.cls}`,
+            'aria-label': st.label,
+          })
+        );
+        row.append(
+          avatar,
+          el('div', { className: 'row-main' }, [
+            el('div', { className: 'row-title', text: paneTitle(p) }),
+            el('div', {
+              className: 'row-summary',
+              text: `${p.agent || 'agent'} · ${p.pane_id}`,
+            }),
+          ])
+        );
+        root.append(row);
+      }
+    }
+  }
+}
+
+// —— chat view ——
+function getPane(paneId) {
+  return (state?.panes || []).find((p) => p.pane_id === paneId) || null;
+}
+
+function ensureBubbleBucket(paneId) {
+  if (!bubbleStore.has(paneId)) {
+    bubbleStore.set(paneId, { items: [], ids: new Set() });
+  }
+  return bubbleStore.get(paneId);
+}
+
+function isNearBottom(scroller, threshold = 80) {
+  return (
+    scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight <
+    threshold
+  );
+}
+
+function scrollToBottom(force = false) {
+  const sc = $('#bubble-scroll');
+  if (!sc) return;
+  if (force || stickToBottom) {
+    sc.scrollTop = sc.scrollHeight;
+    stickToBottom = true;
+    $('#btn-jump-bottom')?.classList.add('hidden');
+  }
+}
+
+function renderBubbles(paneId) {
+  const list = $('#bubble-list');
+  if (!list) return;
+  const bucket = ensureBubbleBucket(paneId);
+  list.replaceChildren();
+  for (const msg of bucket.items) {
+    const vm = mapBubbleToView(msg);
+    const row = el('div', { className: `bubble-row ${vm.side}` });
+    const bubble = el('div', {
+      className: `bubble ${vm.variant}`,
+      text: vm.text || ' ',
+    });
+    row.append(bubble);
+    list.append(row);
+  }
+  const load = $('#load-earlier');
+  if (load) {
+    load.classList.toggle('hidden', bucket.items.length < 10);
+  }
+}
+
+function appendBubble(paneId, msg, { render = true } = {}) {
+  const bucket = ensureBubbleBucket(paneId);
+  const id = String(msg.id ?? `${msg.ts}:${msg.role}:${msg.text?.slice?.(0, 20)}`);
+  if (bucket.ids.has(id)) return false;
+  bucket.ids.add(id);
+  bucket.items.push({ ...msg, id });
+  bucket.items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  if (render && paneId === activePaneId) {
+    const sc = $('#bubble-scroll');
+    const follow = sc ? isNearBottom(sc) : true;
+    stickToBottom = follow;
+    renderBubbles(paneId);
+    if (follow) scrollToBottom(true);
+    else $('#btn-jump-bottom')?.classList.remove('hidden');
+  }
+  return true;
+}
+
+function mergeMessages(paneId, messages, { prepend = false } = {}) {
+  const bucket = ensureBubbleBucket(paneId);
+  let added = 0;
+  for (const m of messages || []) {
+    const id = String(m.id ?? `${m.ts}:${m.role}:${(m.text || '').slice(0, 20)}`);
+    if (bucket.ids.has(id)) continue;
+    bucket.ids.add(id);
+    bucket.items.push({ ...m, id });
+    added++;
+  }
+  bucket.items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  if (paneId === activePaneId) {
+    const sc = $('#bubble-scroll');
+    const prevHeight = sc?.scrollHeight || 0;
+    const prevTop = sc?.scrollTop || 0;
+    renderBubbles(paneId);
+    if (prepend && sc) {
+      sc.scrollTop = sc.scrollHeight - prevHeight + prevTop;
+    } else if (stickToBottom) {
+      scrollToBottom(true);
+    }
+  }
+  return added;
+}
+
+async function loadChatMessages(paneId, { reset = false } = {}) {
+  if (reset) {
+    bubbleStore.set(paneId, { items: [], ids: new Set() });
+  }
+  const messages = await fetchMessages(paneId, { limit: 50 });
+  mergeMessages(paneId, messages);
+  stickToBottom = true;
+  scrollToBottom(true);
+}
+
+async function loadEarlier() {
+  if (!activePaneId || loadingEarlier) return;
+  const bucket = ensureBubbleBucket(activePaneId);
+  if (!bucket.items.length) return;
+  const oldest = bucket.items[0]?.ts;
+  if (oldest == null) return;
+  loadingEarlier = true;
+  try {
+    const messages = await fetchMessages(activePaneId, {
+      before: oldest,
+      limit: 40,
+    });
+    mergeMessages(activePaneId, messages, { prepend: true });
+  } catch {
+    /* ignore */
+  } finally {
+    loadingEarlier = false;
+  }
+}
+
+function updateChatHeader(paneId) {
+  const pane = getPane(paneId);
+  const title = $('#chat-title');
+  const dot = $('#chat-status-dot');
+  const blocked = $('#blocked-bar');
+  if (title) title.textContent = paneTitle(pane || { pane_id: paneId });
+  const st = statusMeta(pane?.agent_status);
+  if (dot) {
+    dot.className = `status-dot ${st.cls}`;
+    dot.setAttribute('aria-label', st.label);
+  }
+  if (blocked) {
+    blocked.classList.toggle('hidden', pane?.agent_status !== 'blocked');
+  }
+}
+
+async function enterChat(paneId) {
+  activePaneId = paneId;
+  updateChatHeader(paneId);
+  stickToBottom = true;
+  try {
+    await loadChatMessages(paneId, { reset: true });
+  } catch {
+    renderBubbles(paneId);
+  }
+  await postSeen(paneId);
+}
+
+async function leaveChat() {
+  if (activePaneId) {
+    await postSeen(activePaneId);
+  }
+  activePaneId = null;
+}
+
+// —— routing ——
+function showView(name) {
+  $$('.view').forEach((v) => {
+    const match = v.dataset.view === name;
+    v.classList.toggle('hidden', !match);
+  });
+  const chatOpen = name === 'chat';
+  document.body.classList.toggle('chat-open', chatOpen);
+  $$('#tab-bar .tab').forEach((t) => {
+    t.classList.toggle('active', t.dataset.tab === name);
+  });
+}
+
+async function applyRoute() {
+  const route = parseRoute(location.hash || '#/chats');
+  if (route.name === 'chat' && route.paneId) {
+    if (activePaneId && activePaneId !== route.paneId) {
+      await leaveChat();
+    }
+    showView('chat');
+    await enterChat(route.paneId);
+    return;
+  }
+  if (activePaneId) await leaveChat();
+  if (route.name === 'contacts') {
+    showView('contacts');
+    renderContacts();
+  } else if (route.name === 'me') {
+    showView('me');
+  } else {
+    showView('chats');
+    renderChatList();
+  }
+}
+
+// —— state apply ——
+function applyState(next) {
+  state = next;
+  const herdr = next?.herdr;
+  const banner = $('#banner-herdr');
+  if (herdr === 'disconnected') {
+    banner?.classList.remove('hidden');
+    if (connMode !== 'err') setConn('warn', 'herdr 断开');
+  } else {
+    banner?.classList.add('hidden');
+  }
+  if (activePaneId) {
+    updateChatHeader(activePaneId);
+  }
+  const route = parseRoute(location.hash || '#/chats');
+  if (route.name === 'chats' || route.name === '' || !location.hash) {
+    renderChatList();
+  } else if (route.name === 'contacts') {
+    renderContacts();
+  }
+}
+
+// —— SSE ——
+function stopSse() {
+  if (sseTimer) {
+    clearTimeout(sseTimer);
+    sseTimer = null;
+  }
+  if (es) {
+    try {
+      es.close();
+    } catch {
+      /* ignore */
+    }
+    es = null;
+  }
+}
+
+function scheduleSseReconnect() {
+  stopSse();
+  setConn('warn', '重连中');
+  const delay = sseBackoffMs(sseAttempt);
+  sseAttempt += 1;
+  sseTimer = setTimeout(() => connectSse(), delay);
+}
+
+function connectSse() {
+  stopSse();
+  // stopSse clears es; reopen
+  if (sseTimer) {
+    clearTimeout(sseTimer);
+    sseTimer = null;
+  }
+  try {
+    es = new EventSource(`${BASE}/api/events`);
+  } catch {
+    scheduleSseReconnect();
+    return;
+  }
+
+  es.addEventListener('open', () => {
+    sseAttempt = 0;
+    setConn('ok', '已连接');
+  });
+
+  es.addEventListener('state', async (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      applyState(data);
+      setConn(
+        data.herdr === 'disconnected' ? 'warn' : 'ok',
+        data.herdr === 'disconnected' ? 'herdr 断开' : '已连接'
+      );
+    } catch {
+      /* ignore */
+    }
+  });
+
+  es.addEventListener('bubble', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      const paneId = data.pane_id;
+      const bubble = data.bubble;
+      if (!paneId || !bubble) return;
+      appendBubble(paneId, bubble);
+      // refresh list summary via next state event; optimistic summary
+      if (state?.panes) {
+        const p = state.panes.find((x) => x.pane_id === paneId);
+        if (p && bubble.text) {
+          const line = String(bubble.text).split('\n').find((l) => l.trim());
+          if (line) p.summary = line.trim().slice(0, 120);
+          p.last_activity = bubble.ts || Date.now();
+          if (parseRoute(location.hash).name === 'chats') renderChatList();
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  });
+
+  es.onerror = () => {
+    setConn('err', '连接断开');
+    try {
+      es?.close();
+    } catch {
+      /* ignore */
+    }
+    es = null;
+    scheduleSseReconnect();
+  };
+}
+
+async function reconnectHard() {
+  sseAttempt = 0;
+  stopSse();
+  setConn('warn', '重连中');
+  try {
+    const s = await fetchState();
+    applyState(s);
+    if (activePaneId) {
+      await loadChatMessages(activePaneId, { reset: true });
+    }
+  } catch {
+    setConn('err', '拉取失败');
+  }
+  connectSse();
+}
+
+// —— wire UI ——
+function wire() {
+  $('#conn-led')?.addEventListener('click', () => {
+    reconnectHard();
+  });
+  $('#btn-back')?.addEventListener('click', () => {
+    // Prefer history back when we pushed chat; else go list
+    if (history.length > 1) history.back();
+    else location.hash = '#/chats';
+  });
+  $('#btn-jump-bottom')?.addEventListener('click', () => {
+    stickToBottom = true;
+    scrollToBottom(true);
+  });
+  $('#btn-load-earlier')?.addEventListener('click', () => loadEarlier());
+  $('#bubble-scroll')?.addEventListener('scroll', () => {
+    const sc = $('#bubble-scroll');
+    if (!sc) return;
+    stickToBottom = isNearBottom(sc);
+    if (stickToBottom) $('#btn-jump-bottom')?.classList.add('hidden');
+    // pull earlier near top
+    if (sc.scrollTop < 40) loadEarlier();
+  });
+
+  $$('.seg-btn[data-theme-set]').forEach((b) => {
+    b.addEventListener('click', () => setTheme(b.dataset.themeSet));
+  });
+  $$('.seg-btn[data-font-set]').forEach((b) => {
+    b.addEventListener('click', () => setFont(b.dataset.fontSet));
+  });
+
+  window.addEventListener('hashchange', () => {
+    applyRoute();
+  });
+
+  // Page hide → mark seen
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && activePaneId) {
+      postSeen(activePaneId);
+    }
+  });
+}
+
+async function boot() {
+  loadSettings();
+  wire();
+  if (!location.hash || location.hash === '#') {
+    location.replace('#/chats');
+  }
+  setConn('warn', '连接中');
+  try {
+    const s = await fetchState();
+    applyState(s);
+    setConn(s.herdr === 'disconnected' ? 'warn' : 'ok', s.herdr === 'disconnected' ? 'herdr 断开' : '已连接');
+  } catch {
+    setConn('err', '无法拉取状态');
+    applyState({ panes: [], herdr: 'disconnected' });
+  }
+  await applyRoute();
+  connectSse();
+}
+
+boot();
