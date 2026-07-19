@@ -7,6 +7,7 @@ import {
   mapBubbleToView,
   agentAvatar,
   statusMeta,
+  statusLabel,
   paneRowClass,
   paneTitle,
   groupContacts,
@@ -1085,16 +1086,17 @@ function renderChatList() {
     avatar.append(
       el('span', {
         className: `status-dot ${st.cls}`,
-        'aria-label': st.label,
+        'aria-hidden': 'true',
       })
     );
-    // Color is primary; micro key under avatar avoids crowding the summary.
+    // Chinese status under avatar = primary signal (was floating banner text);
+    // status-dot stays as color assist. Summary stays in row-main mid column.
     const avatarCol = el('div', { className: 'row-avatar-col' }, [
       avatar,
       el('span', {
         className: `row-status-label ${st.cls}`,
-        text: st.key,
-        'aria-hidden': 'true',
+        text: statusLabel(p.agent_status),
+        'aria-label': st.label,
       }),
     ]);
     const summary = el('div', {
@@ -1366,12 +1368,19 @@ function updateChatHeader(paneId) {
   const pane = getPane(paneId);
   const title = $('#chat-title');
   const dot = $('#chat-status-dot');
+  const labelEl = $('#chat-status-label');
   const blocked = $('#blocked-bar');
   if (title) title.textContent = paneTitle(pane || { pane_id: paneId });
   const st = statusMeta(pane?.agent_status);
+  const label = statusLabel(pane?.agent_status);
   if (dot) {
     dot.className = `status-dot ${st.cls}`;
-    dot.setAttribute('aria-label', st.label);
+    dot.setAttribute('aria-hidden', 'true');
+  }
+  if (labelEl) {
+    labelEl.className = `chat-status-label ${st.cls}`;
+    labelEl.textContent = label;
+    labelEl.setAttribute('aria-label', label);
   }
   if (blocked) {
     blocked.classList.toggle('hidden', pane?.agent_status !== 'blocked');

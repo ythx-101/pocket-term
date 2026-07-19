@@ -24,6 +24,7 @@ import {
   mapBubbleToView,
   agentAvatar,
   statusMeta,
+  statusLabel,
   statusDotClass,
   paneRowClass,
   paneTitle,
@@ -136,6 +137,20 @@ describe('spa pure: avatar / status / route / contacts', () => {
   it('statusMeta labels in Chinese', () => {
     assert.equal(statusMeta('working').label, '工作中');
     assert.equal(statusMeta('blocked').cls, 'st-blocked');
+    assert.equal(statusMeta('blocked').label, '等你回复');
+    assert.equal(statusMeta('done').label, '完成');
+  });
+
+  it('statusLabel returns Chinese for all five statuses + unknown fallback', () => {
+    assert.equal(statusLabel('idle'), '空闲');
+    assert.equal(statusLabel('working'), '工作中');
+    assert.equal(statusLabel('blocked'), '等你回复');
+    assert.equal(statusLabel('done'), '完成');
+    assert.equal(statusLabel('unknown'), '未知');
+    assert.equal(statusLabel(null), '未知');
+    assert.equal(statusLabel(undefined), '未知');
+    assert.equal(statusLabel(''), '未知');
+    assert.equal(statusLabel('other'), '未知');
   });
 
   it('statusDotClass maps idle/working/blocked/done/unknown to color classes', () => {

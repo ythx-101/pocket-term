@@ -357,9 +357,9 @@ html.has-wallpaper .topbar {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 0.2rem;
+  gap: 0.25rem;
   flex-shrink: 0;
-  width: 48px;
+  width: 52px;
 }
 
 .avatar {
@@ -389,10 +389,20 @@ html.has-wallpaper .topbar {
   right: -3px;
   bottom: -3px;
 }
-/* chat header dot stays slightly smaller */
+/* chat header: small color dot + Chinese status text (primary) */
 .chat-title-wrap .status-dot {
   width: 10px;
   height: 10px;
+}
+.chat-status-label {
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+  flex-shrink: 0;
+  max-width: 5.5em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .st-working {
@@ -400,7 +410,7 @@ html.has-wallpaper .topbar {
   animation: breathe 1.4s ease-in-out infinite;
 }
 .st-blocked {
-  background: var(--red);
+  background: var(--danger);
 }
 .st-done {
   background: var(--blue);
@@ -412,39 +422,49 @@ html.has-wallpaper .topbar {
   background: var(--unknown);
 }
 
-/* micro status under avatar — optional, never crowds summary */
+/* Chinese status under avatar — primary signal; ≥12px; does not crowd summary */
 .row-status-label {
-  font-size: 9px;
-  line-height: 1;
-  letter-spacing: 0.02em;
-  text-transform: lowercase;
+  font-size: 12px;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: 0;
   color: var(--fg-muted);
-  max-width: 48px;
+  max-width: 52px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: center;
+  background: transparent;
 }
-.row-status-label.st-working {
+.row-status-label.st-working,
+.chat-status-label.st-working {
   color: var(--ok);
+  background: transparent;
+  animation: status-text-breathe 1.4s ease-in-out infinite;
+}
+.row-status-label.st-blocked,
+.chat-status-label.st-blocked {
+  color: var(--danger);
   background: transparent;
   animation: none;
 }
-.row-status-label.st-blocked {
-  color: var(--red);
-  background: transparent;
-}
-.row-status-label.st-done {
+.row-status-label.st-done,
+.chat-status-label.st-done {
   color: var(--blue);
   background: transparent;
+  animation: none;
 }
-.row-status-label.st-idle {
+.row-status-label.st-idle,
+.chat-status-label.st-idle {
   color: var(--idle);
   background: transparent;
+  animation: none;
 }
-.row-status-label.st-unknown {
+.row-status-label.st-unknown,
+.chat-status-label.st-unknown {
   color: var(--fg-muted);
   background: transparent;
+  animation: none;
 }
 
 @keyframes breathe {
@@ -456,6 +476,17 @@ html.has-wallpaper .topbar {
   50% {
     opacity: 0.55;
     transform: scale(0.85);
+  }
+}
+
+/* Mild opacity pulse for working status text (no scale — keeps layout stable) */
+@keyframes status-text-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.65;
   }
 }
 

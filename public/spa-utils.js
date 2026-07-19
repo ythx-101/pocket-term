@@ -90,8 +90,9 @@ export function agentAvatar(agent) {
 }
 
 /**
- * Status display: color class + Chinese aria label + micro key for list.
+ * Status display: color class + Chinese label (primary signal) + key.
  * Color mapping: idle=灰 working=绿(脉动) blocked=红 done=蓝 unknown=暗.
+ * Labels match the old floating-banner wording, now permanent on the left.
  * @param {string|null|undefined} status
  * @returns {{ cls: string, label: string, key: string }}
  */
@@ -100,14 +101,23 @@ export function statusMeta(status) {
     case 'working':
       return { cls: 'st-working', label: '工作中', key: 'working' };
     case 'blocked':
-      return { cls: 'st-blocked', label: '等待回复', key: 'blocked' };
+      return { cls: 'st-blocked', label: '等你回复', key: 'blocked' };
     case 'done':
-      return { cls: 'st-done', label: '已完成', key: 'done' };
+      return { cls: 'st-done', label: '完成', key: 'done' };
     case 'idle':
       return { cls: 'st-idle', label: '空闲', key: 'idle' };
     default:
       return { cls: 'st-unknown', label: '未知', key: 'unknown' };
   }
+}
+
+/**
+ * Pure status → Chinese status text for list/header (primary signal).
+ * @param {string|null|undefined} status
+ * @returns {string}
+ */
+export function statusLabel(status) {
+  return statusMeta(status).label;
 }
 
 /**
