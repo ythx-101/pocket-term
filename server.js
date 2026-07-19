@@ -13,6 +13,11 @@ import {
   isSafeWallpaperName,
 } from './lib/state-manager.js';
 import { createClient, DEFAULT_SOCKET_PATH } from './lib/herdr-client.js';
+import {
+  createPushService,
+  pushConfigFromEnv,
+  PUSH_BODY_MAX_BYTES,
+} from './lib/push-service.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -870,6 +875,9 @@ export async function resolveStatic(urlPath, publicDir = PUBLIC_DIR) {
  *   assetVersion?: string,
  *   chatUploadDir?: string,
  *   fileServeRoot?: string,
+ *   pushService?: Awaited<ReturnType<typeof createPushService>>,
+ *   pushSender?: (subscription: object, payload: string) => Promise<unknown>,
+ *   pushConfig?: ReturnType<typeof pushConfigFromEnv>,
  * }} [options]
  */
 export async function startServer(options = {}) {
@@ -902,12 +910,19 @@ export async function startServer(options = {}) {
       allowWrite: !readonly,
     });
 
+  const pushService = options.pushService ?? await createPushService({
+    stateDir,
+    config: options.pushConfig ?? pushConfigFromEnv(),
+    sender: options.pushSender,
+  });
+
   const manager = createStateManager({
     client,
     stateDir,
     socketPath: options.socketPath,
     readonly,
     allowWrite: !readonly,
+    onNotifyStatus: (event) => pushService.dispatch(event),
   });
   await manager.start();
 
@@ -930,8 +945,8 @@ export async function startServer(options = {}) {
     const rawPath = (req.url || '/').split('?')[0];
     const pathname = url.pathname;
 
-    if (method !== 'GET' && method !== 'POST' && method !== 'HEAD') {
-      res.setHeader('Allow', 'GET, HEAD, POST');
+    if (method !== 'GET' && method !== 'POST' && method !== 'DELETE' && method !== 'HEAD') {
+      res.setHeader('Allow', 'GET, HEAD, POST, DELETE');
       sendText(res, 405, 'method not allowed');
       return;
     }
@@ -1218,6 +1233,44 @@ export async function startServer(options = {}) {
       return;
     }
 
+    // --- Web Push (additive to the in-app notification fallback) ---
+    if (pathname === '/herd/api/push/vapid-public' && (method === 'GET' || method === 'HEAD')) {
+      if (!pushService.configured) {
+        sendJson(res, 503, { error: 'push_not_configured' });
+      } else {
+        sendJson(res, 200, { publicKey: pushService.publicKey });
+      }
+      return;
+    }
+
+    if (pathname === '/herd/api/push/subscribe' && (method === 'POST' || method === 'DELETE')) {
+      if (!isSameOriginWrite(req)) {
+        sendJson(res, 403, { error: 'cross_origin' });
+        return;
+      }
+      const body = await readBodyLimited(req, PUSH_BODY_MAX_BYTES);
+      if (!body.ok) {
+        sendJson(res, body.status, { error: body.error });
+        return;
+      }
+      let payload;
+      try {
+        payload = body.raw ? JSON.parse(body.raw) : {};
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json' });
+        return;
+      }
+      const result = method === 'POST'
+        ? await pushService.subscribe(payload)
+        : await pushService.unsubscribe(payload?.endpoint);
+      if (!result.ok) {
+        sendJson(res, result.status, { error: result.error });
+        return;
+      }
+      sendJson(res, 200, method === 'POST' ? { subscribed: true } : { deleted: result.deleted });
+      return;
+    }
+
     // --- static under /herd ---
     // Exact /herd (no trailing slash) would make relative assets like ./style.css
     // resolve to /style.css outside our route. Redirect so the browser stays under /herd/.
@@ -1251,6 +1304,8 @@ export async function startServer(options = {}) {
             const html = injectAssetVersionInHtml(data.toString('utf8'), assetVersion);
             data = Buffer.from(html, 'utf8');
             headers['Cache-Control'] = CACHE_HTML;
+          } else if (basename === 'sw.js') {
+            headers['Cache-Control'] = 'no-store';
           } else if (FINGERPRINTED_ASSETS.has(basename)) {
             // app.js must also rewrite its spa-utils import so the module URL busts.
             if (basename === 'app.js') {
@@ -1316,6 +1371,7 @@ export async function startServer(options = {}) {
   return {
     server,
     manager,
+    pushService,
     host,
     port: actualPort,
     readonly,

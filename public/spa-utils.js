@@ -767,6 +767,26 @@ export function parseNotifyToggle(raw) {
   return raw !== '0';
 }
 
+/** Decode a VAPID base64url public key for PushManager.subscribe(). */
+export function vapidKeyToBytes(value) {
+  const text = String(value || '').replace(/-/g, '+').replace(/_/g, '/');
+  const padded = text + '='.repeat((4 - (text.length % 4)) % 4);
+  const raw = atob(padded);
+  const bytes = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+  if (bytes.length !== 65 || bytes[0] !== 4) throw new Error('VAPID 公钥格式无效');
+  return bytes;
+}
+
+/** Pure mobile lifecycle recovery decision. */
+export function shouldRecoverLifecycle({ type, visibilityState, persisted, online, sseHealthy, recoveryPending }) {
+  if (sseHealthy || recoveryPending) return false;
+  if (type === 'visibilitychange') return visibilityState === 'visible';
+  if (type === 'pageshow') return persisted === true;
+  if (type === 'online') return online !== false;
+  return false;
+}
+
 /** Collapse identical toast text within this window (ms). */
 export const TOAST_COLLAPSE_MS = 3000;
 /** Auto-dismiss toast after this many ms. */

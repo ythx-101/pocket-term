@@ -9,6 +9,7 @@ Deploy / rollback for the local bridge + optional public path.
 - herdr server up; socket readable by the service user (default root)
 - Bridge binds **127.0.0.1 only** (default `PT2_PORT=7690`)
 - Do not paste secrets into tickets or chat logs
+- Web Push is optional. Keep VAPID values in the service environment, never in this repository; absence safely leaves page notifications enabled.
 
 ## A. Local service only (systemd, no public path)
 
@@ -116,6 +117,8 @@ herdr integration uninstall claude   # or project-documented reverse
 | Empty summaries | Tier B seed read failed; pane.read errors in journal |
 | 502 on `/herd` | bridge down or cloudflared rule points wrong port |
 | `/` or `/up` broken after deploy | ingress order wrong — restore backup immediately |
+| Web Push button says `push_not_configured` | all three `PT2_VAPID_*` environment values are required; do not generate keys in the app |
+| Worker registration fails | confirm `/herd/sw.js` returns JavaScript (not an Access login response) and `Cache-Control: no-store` |
 
 ## D. Security notes
 

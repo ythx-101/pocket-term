@@ -592,7 +592,7 @@ describe('notify: SPA wiring (static source)', () => {
     assert.match(css, /\.banner-notify-link[\s\S]*?safe-area-inset-top/);
   });
 
-  it('no service-worker / Web Push / VAPID / system-notification artifacts', async () => {
+  it('keeps the in-app fallback while Web Push is additive', async () => {
     const root = path.join(__dirname, '..');
     const sources = {
       'public/index.html': html,
@@ -604,27 +604,12 @@ describe('notify: SPA wiring (static source)', () => {
       ),
       'server.js': await fs.readFile(path.join(root, 'server.js'), 'utf8'),
     };
-    const forbidden = [
-      /service[-_]?worker/i,
-      /PushManager/,
-      /PushSubscription/,
-      /applicationServerKey/,
-      /vapid/i,
-      /push-subs/,
-      /new\s+Notification\s*\(/,
-      /requestPermission/,
-    ];
-    for (const [file, src] of Object.entries(sources)) {
-      for (const re of forbidden) {
-        assert.doesNotMatch(src, re, `${file} must not contain ${re}`);
-      }
-    }
-    const pubFiles = await fs.readdir(path.join(root, 'public'));
-    const forbiddenNames = /^(sw|service-worker|push.*)\.js$|\.webmanifest$/i;
-    assert.deepEqual(
-      pubFiles.filter((f) => forbiddenNames.test(f)),
-      [],
-      'no service worker / push / manifest files in public/'
-    );
+    assert.match(sources['public/app.js'], /reduceNotifications/);
+    assert.match(sources['public/app.js'], /requestPermission/);
+    assert.match(sources['public/app.js'], /serviceWorker\.register/);
+    assert.match(sources['public/index.html'], /id="btn-enable-push"/);
+    assert.match(sources['public/index.html'], /页内通知继续生效/);
+    assert.match(sources['server.js'], /push\/vapid-public/);
+    assert.equal((await fs.readdir(path.join(root, 'public'))).includes('sw.js'), true);
   });
 });

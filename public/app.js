@@ -38,6 +38,8 @@ import {
   formatNotifyBadge,
   notifyBannerView,
   parseNotifyToggle,
+  vapidKeyToBytes,
+  shouldRecoverLifecycle,
 } from './spa-utils.js';
 
 const APP_VERSION = '0.2.0';
@@ -120,6 +122,87 @@ let attachPreview = initialAttachPreview();
 let imageViewerSrc = null;
 /** In-app notification state (M2.5): baseline + pending + debounce. */
 let notifyState = initialNotifyState();
+
+function renderPushDiagnostic(lines, kind = '') {
+  const out = $('#push-diagnostic');
+  if (!out) return;
+  out.textContent = [].concat(lines).join('\n');
+  out.classList.toggle('ok', kind === 'ok');
+  out.classList.toggle('err', kind === 'err');
+}
+
+function diagnosticError(stage, err) {
+  const name = err?.name ? `${err.name}: ` : '';
+  return `${stage}失败 — ${name}${err?.message || String(err || '未知错误')}\n结论：Web Push 未启用；页内通知继续生效。`;
+}
+
+async function enableWebPush() {
+  const button = /** @type {HTMLButtonElement|null} */ ($('#btn-enable-push'));
+  if (button) button.disabled = true;
+  const steps = [];
+  let stage = '浏览器支持检测';
+  try {
+    const checks = {
+      '安全上下文': window.isSecureContext === true,
+      'Service Worker': 'serviceWorker' in navigator,
+      'Push API': 'PushManager' in window,
+      '通知 API': 'Notification' in window,
+    };
+    for (const [name, ok] of Object.entries(checks)) steps.push(`${ok ? '✓' : '✗'} ${name}`);
+    renderPushDiagnostic(steps);
+    const missing = Object.entries(checks).filter(([, ok]) => !ok).map(([name]) => name);
+    if (missing.length) throw new Error(`浏览器不支持：${missing.join('、')}`);
+
+    steps.push(`• 当前权限：${Notification.permission}`);
+    renderPushDiagnostic(steps);
+    stage = '通知权限';
+    const permission = Notification.permission === 'default'
+      ? await Notification.requestPermission()
+      : Notification.permission;
+    steps.push(`• 权限结果：${permission}`);
+    renderPushDiagnostic(steps);
+    if (permission !== 'granted') throw new Error(`通知权限为 ${permission}`);
+
+    stage = 'Service Worker 注册';
+    const registration = await navigator.serviceWorker.register(`${BASE}/sw.js`, { scope: `${BASE}/` });
+    steps.push(`✓ Service Worker：${registration.scope}`);
+    renderPushDiagnostic(steps);
+
+    stage = 'VAPID API';
+    const keyRes = await fetch(`${BASE}/api/push/vapid-public`, { cache: 'no-store' });
+    const keyBody = await keyRes.json().catch(() => ({}));
+    if (!keyRes.ok) throw new Error(`VAPID API HTTP ${keyRes.status} (${keyBody.error || 'unknown'})`);
+    steps.push('✓ VAPID 公钥已取得');
+    renderPushDiagnostic(steps);
+
+    stage = '浏览器 Push 订阅';
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) {
+      subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: vapidKeyToBytes(keyBody.publicKey),
+      });
+    }
+    steps.push('✓ 浏览器 Push 订阅已建立');
+    renderPushDiagnostic(steps);
+
+    stage = '服务端订阅登记';
+    const saveRes = await fetch(`${BASE}/api/push/subscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(subscription.toJSON()),
+    });
+    const saveBody = await saveRes.json().catch(() => ({}));
+    if (!saveRes.ok) throw new Error(`订阅登记 HTTP ${saveRes.status} (${saveBody.error || 'unknown'})`);
+    steps.push('✓ 服务端登记成功');
+    steps.push('结论：Web Push 已启用；页内通知仍保留为兜底。');
+    renderPushDiagnostic(steps, 'ok');
+  } catch (err) {
+    renderPushDiagnostic([...steps, diagnosticError(stage, err)], 'err');
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
 
 // —— settings ——
 function getLocalPrefs() {
@@ -1481,6 +1564,27 @@ async function reconnectHard() {
   connectSse();
 }
 
+function isSseHealthy() {
+  return Boolean(es && es.readyState === 1 && connMode === 'ok');
+}
+
+let lifecycleRecoveryPending = false;
+function recoverForLifecycle(type, details = {}) {
+  if (shouldRecoverLifecycle({
+    type,
+    visibilityState: document.visibilityState,
+    persisted: details.persisted === true,
+    online: navigator.onLine,
+    sseHealthy: isSseHealthy(),
+    recoveryPending: lifecycleRecoveryPending,
+  })) {
+    lifecycleRecoveryPending = true;
+    Promise.resolve(reconnectHard()).finally(() => {
+      lifecycleRecoveryPending = false;
+    });
+  }
+}
+
 // —— wire UI ——
 function wire() {
   $('#conn-led')?.addEventListener('click', () => {
@@ -1532,6 +1636,7 @@ function wire() {
     const on = /** @type {HTMLInputElement} */ (ev.target).checked;
     localStorage.setItem(LS_NOTIFY_DONE, on ? '1' : '0');
   });
+  $('#btn-enable-push')?.addEventListener('click', () => enableWebPush());
 
   // Wallpaper picker + dim (M2)
   $('#btn-wallpaper')?.addEventListener('click', () => {
@@ -1652,12 +1757,18 @@ function wire() {
     applyRoute();
   });
 
-  // Page hide → mark seen
+  // Page hide → mark seen; mobile return → repair only an unhealthy SSE.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden' && activePaneId) {
       postSeen(activePaneId);
+    } else if (document.visibilityState === 'visible') {
+      recoverForLifecycle('visibilitychange');
     }
   });
+  window.addEventListener('pageshow', (event) => {
+    recoverForLifecycle('pageshow', { persisted: event.persisted });
+  });
+  window.addEventListener('online', () => recoverForLifecycle('online'));
 }
 
 async function boot() {

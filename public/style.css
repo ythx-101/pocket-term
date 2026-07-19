@@ -1250,6 +1250,33 @@ body.chat-open .toast-host {
 .settings-hint code {
   font-size: 0.92em;
 }
+
+.push-settings {
+  display: grid;
+  gap: 0.55rem;
+  margin-top: 0.75rem;
+}
+.push-enable-btn {
+  appearance: none;
+  border: 1px solid var(--accent);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  min-height: 42px;
+  padding: 0.55rem 0.75rem;
+  font: inherit;
+  font-weight: 600;
+}
+.push-enable-btn:disabled { opacity: 0.6; }
+.push-diagnostic {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.push-diagnostic.ok { color: var(--ok); }
+.push-diagnostic.err { color: var(--danger); }
 .about a {
   color: var(--accent);
 }

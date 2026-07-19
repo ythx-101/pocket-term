@@ -2,9 +2,9 @@
 
 **中文** | **English** below.
 
-`pocket-term-2` 是 **pocket-term 产品线** 的第二个产品：把 [herdr](https://github.com/) agent 舰队做成微信式会话客户端——在手机上浏览会话列表、点进某个 pane 看消息气泡、看状态灯与未读，而不是再嵌一整屏共享终端。
+`pocket-term-2` 是 **pocket-term 产品线** 的第二个产品：把 [herdr](https://github.com/) agent 舰队做成微信式会话客户端——在手机上浏览会话列表、点进某个 pane 看消息气泡、看状态灯与未读，而不是再嵌一整屏共享终端。支持页内通知，并可选启用标准 Web Push。
 
-本仓库是 **M0 只读** 实现：数据全部来自 herdr Unix socket 的读接口 +（可选）Claude Code 会话 JSONL；唯一的“写”是 bridge 自己的 `state/last-seen.json`（标记已读）。发送指令属于 M1，不在本阶段。
+数据主要来自 herdr Unix socket +（可选）Claude Code 会话 JSONL。Bridge 的应用状态写入限制在忽略版本控制的 `state/`；Web Push 订阅只写入 `state/push-subscriptions.json`。
 
 ---
 
@@ -12,7 +12,7 @@
 
 **pocket-term-2** is the second app in the **pocket-term product line**: a WeChat-style chat front-end for your herdr agent fleet. The browser talks only to a small local Node bridge; the bridge talks to `herdr.sock` with a hard-coded **read-only** method whitelist.
 
-M0 is read-only. Sending prompts is deferred to M1.
+The bridge supports guarded pane sends and optional Web Push; its emergency `PT2_READONLY` fuse remains available.
 
 ---
 
@@ -47,6 +47,9 @@ Browser ──(CF Access)── reverse proxy ──► 127.0.0.1:7690  pocket-t
 | GET | `/herd/api/pane/:id/messages?before=&limit=` | Bubble history |
 | GET | `/herd/api/events` | SSE (`state`, `bubble`, `:heartbeat`) |
 | POST | `/herd/api/seen/:id` | Mark pane seen (writes `state/last-seen.json` only) |
+| GET | `/herd/api/push/vapid-public` | Web Push public key (503 when unconfigured) |
+| POST | `/herd/api/push/subscribe` | Register a same-origin browser subscription |
+| DELETE | `/herd/api/push/subscribe` | Remove a same-origin browser subscription |
 
 Default bind: `PT2_HOST=127.0.0.1` `PT2_PORT=7690` (override via env).
 
@@ -75,13 +78,19 @@ PT2_BASE=http://127.0.0.1:7690 ./scripts/smoke.sh
 
 ## Tests
 
-Zero npm dependencies. Built-in test runner only:
+The runtime uses the maintained `web-push` package; tests use Node's built-in runner:
 
 ```bash
 node --test test/**/*.test.mjs
 # or
 npm test
 ```
+
+## Optional Web Push
+
+Set `PT2_VAPID_SUBJECT`, `PT2_VAPID_PUBLIC_KEY`, and `PT2_VAPID_PRIVATE_KEY` in the deployment environment. Generate and manage these outside the repository; never commit them. Browser subscriptions are stored only in ignored `state/push-subscriptions.json`. Without all three variables, Web Push reports `push_not_configured` and the existing page banner/badge fallback continues normally.
+
+The worker is served at `/herd/sw.js`, scoped to `/herd/`, and displays notifications entirely from the encrypted push payload without fetching an Access-protected API.
 
 Live tests that touch herdr use **read-only** methods only (`ping`, `session.snapshot`, `pane.read`, `events.*`).
 

@@ -319,6 +319,14 @@
             <p class="settings-hint">
               页内通知：顶部横幅 + 「会话」角标；仅本机浏览器，打开会话即清除
             </p>
+            <div class="push-settings">
+              <button id="btn-enable-push" class="push-enable-btn" type="button">
+                启用系统通知（Web Push）
+              </button>
+              <div id="push-diagnostic" class="push-diagnostic" role="status" aria-live="polite">
+                尚未检测；不支持或启用失败时，页内通知继续生效。
+              </div>
+            </div>
           </div>
           <div class="settings-group">
             <div class="settings-label">字号</div>
