@@ -96,6 +96,23 @@
             </button>
           </div>
           <div class="composer-row">
+            <button
+              type="button"
+              id="btn-attach"
+              class="attach-btn"
+              aria-label="上传图片"
+              title="上传图片"
+            >
+              📎
+            </button>
+            <input
+              type="file"
+              id="attach-input"
+              class="sr-only"
+              accept="image/*"
+              tabindex="-1"
+              aria-hidden="true"
+            />
             <textarea
               id="composer-input"
               class="composer-input"
@@ -158,7 +175,22 @@
               <span class="wallpaper-card-chevron" aria-hidden="true">›</span>
             </button>
             <div id="wallpaper-panel" class="wallpaper-panel hidden" role="listbox" aria-label="可用壁纸">
-              <!-- filled by app.js -->
+              <div class="wallpaper-panel-toolbar">
+                <button type="button" id="btn-add-wallpaper" class="add-wallpaper-btn">
+                  添加壁纸
+                </button>
+                <input
+                  type="file"
+                  id="wallpaper-file-input"
+                  class="sr-only"
+                  accept="image/*"
+                  tabindex="-1"
+                  aria-hidden="true"
+                />
+              </div>
+              <div id="wallpaper-panel-list" class="wallpaper-panel-list">
+                <!-- filled by app.js -->
+              </div>
             </div>
             <label class="dim-row" id="dim-row">
               <span>暗化</span>

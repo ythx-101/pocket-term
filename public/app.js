@@ -268,9 +268,9 @@ async function postSettings(patch) {
 }
 
 function renderWallpaperPanel() {
-  const panel = $('#wallpaper-panel');
-  if (!panel) return;
-  panel.replaceChildren();
+  const list = $('#wallpaper-panel-list') || $('#wallpaper-panel');
+  if (!list) return;
+  list.replaceChildren();
 
   const noneBtn = el(
     'button',
@@ -286,10 +286,10 @@ function renderWallpaperPanel() {
       el('span', { className: 'wallpaper-option-label', text: '无壁纸' }),
     ]
   );
-  panel.append(noneBtn);
+  list.append(noneBtn);
 
   if (!wallpaperCatalog.length) {
-    panel.append(
+    list.append(
       el('div', {
         className: 'wallpaper-empty',
         text: '暂无可用壁纸',
@@ -319,7 +319,150 @@ function renderWallpaperPanel() {
         el('span', { className: 'wallpaper-option-label', text: item.name }),
       ]
     );
-    panel.append(btn);
+    list.append(btn);
+  }
+}
+
+/**
+ * Upload raw image bytes to bridge.
+ * @param {'chat'|'wallpaper'} target
+ * @param {File} file
+ * @returns {Promise<{ path?: string, name?: string }>}
+ */
+async function uploadImage(target, file) {
+  const buf = await file.arrayBuffer();
+  const res = await fetch(
+    `${BASE}/api/upload?target=${encodeURIComponent(target)}`,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': file.type || 'application/octet-stream',
+        'X-Filename': file.name || 'image.jpg',
+      },
+      body: buf,
+    }
+  );
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  if (!res.ok) {
+    const err = body?.error || `upload ${res.status}`;
+    const e = new Error(err);
+    // @ts-ignore
+    e.status = res.status;
+    // @ts-ignore
+    e.code = body?.error;
+    throw e;
+  }
+  return body && typeof body === 'object' ? body : {};
+}
+
+/**
+ * Insert `[图片: <path>]` into composer (append with space if needed).
+ * @param {string} pathAbs
+ */
+function insertImagePathIntoComposer(pathAbs) {
+  const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
+  if (!input) return;
+  const token = `[图片: ${pathAbs}]`;
+  const cur = input.value;
+  if (!cur) {
+    input.value = token;
+  } else if (/\s$/.test(cur)) {
+    input.value = cur + token;
+  } else {
+    input.value = `${cur} ${token}`;
+  }
+  autoSizeComposer(input);
+  input.focus();
+  // Move caret to end
+  const len = input.value.length;
+  try {
+    input.setSelectionRange(len, len);
+  } catch {
+    /* ignore */
+  }
+}
+
+/**
+ * Chat attach flow: pick image → upload → insert path token.
+ * @param {File} file
+ */
+async function handleChatImageUpload(file) {
+  const btn = /** @type {HTMLButtonElement|null} */ ($('#btn-attach'));
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('uploading');
+    btn.setAttribute('aria-busy', 'true');
+    btn.title = '上传中…';
+  }
+  try {
+    const result = await uploadImage('chat', file);
+    if (!result.path) throw new Error('missing_path');
+    insertImagePathIntoComposer(String(result.path));
+    showToast('图片已插入', 'info');
+  } catch (err) {
+    const code = /** @type {any} */ (err)?.code || err?.message;
+    if (code === 'payload_too_large' || /** @type {any} */ (err)?.status === 413) {
+      showToast('图片太大（上限 10MB）', 'err');
+    } else if (code === 'readonly') {
+      showToast('只读模式，无法上传聊天图片', 'err');
+    } else if (code === 'invalid_extension' || code === 'magic_mismatch') {
+      showToast('仅支持 jpg/png/webp/gif', 'err');
+    } else {
+      showToast('图片上传失败', 'err');
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('uploading');
+      btn.removeAttribute('aria-busy');
+      btn.title = '上传图片';
+    }
+  }
+}
+
+/**
+ * Wallpaper add flow: pick image → upload → refresh list + select.
+ * @param {File} file
+ */
+async function handleWallpaperImageUpload(file) {
+  const btn = /** @type {HTMLButtonElement|null} */ ($('#btn-add-wallpaper'));
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('uploading');
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = '上传中…';
+  }
+  try {
+    const result = await uploadImage('wallpaper', file);
+    if (!result.name) throw new Error('missing_name');
+    try {
+      await fetchWallpapers();
+    } catch {
+      /* still try select */
+    }
+    await selectWallpaper(String(result.name));
+    showToast('壁纸已添加', 'info');
+  } catch (err) {
+    const code = /** @type {any} */ (err)?.code || err?.message;
+    if (code === 'payload_too_large' || /** @type {any} */ (err)?.status === 413) {
+      showToast('图片太大（上限 10MB）', 'err');
+    } else if (code === 'invalid_extension' || code === 'magic_mismatch') {
+      showToast('仅支持 jpg/png/webp/gif', 'err');
+    } else {
+      showToast('壁纸上传失败', 'err');
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('uploading');
+      btn.removeAttribute('aria-busy');
+      btn.textContent = '添加壁纸';
+    }
   }
 }
 
@@ -1134,6 +1277,30 @@ function wire() {
   dimSlider?.addEventListener('input', (ev) => {
     const v = /** @type {HTMLInputElement} */ (ev.target).value;
     onDimSliderInput(v);
+  });
+
+  // Wallpaper: add image (M2-P1)
+  $('#btn-add-wallpaper')?.addEventListener('click', () => {
+    const input = /** @type {HTMLInputElement|null} */ ($('#wallpaper-file-input'));
+    input?.click();
+  });
+  $('#wallpaper-file-input')?.addEventListener('change', (ev) => {
+    const input = /** @type {HTMLInputElement} */ (ev.target);
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (file) handleWallpaperImageUpload(file);
+  });
+
+  // Chat attach image (M2-P1)
+  $('#btn-attach')?.addEventListener('click', () => {
+    const input = /** @type {HTMLInputElement|null} */ ($('#attach-input'));
+    input?.click();
+  });
+  $('#attach-input')?.addEventListener('change', (ev) => {
+    const input = /** @type {HTMLInputElement} */ (ev.target);
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (file) handleChatImageUpload(file);
   });
 
   // Composer: tap send (do not hijack Enter — mobile IME safe)

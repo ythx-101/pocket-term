@@ -23,6 +23,15 @@ const STATE_DIR = path.join(ROOT, 'state');
 /** Max JSON body for POST /send and /settings (8 KiB). */
 export const SEND_BODY_MAX_BYTES = 8 * 1024;
 
+/** Max image upload body (10 MiB). */
+export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+/** Default chat upload sink (shared with pocket-term terminal uploads). */
+export const DEFAULT_CHAT_UPLOAD_DIR = '/srv/term-uploads';
+
+/** Allowed image extensions for POST /herd/api/upload. */
+export const UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+
 /** Fingerprinted SPA assets: long-cache + ?v= rewrite in HTML (and app.js→spa-utils). */
 export const FINGERPRINTED_ASSETS = new Set([
   'app.js',
@@ -37,7 +46,7 @@ export const CACHE_HTML = 'no-store';
 /** Cache-Control for wallpaper images. */
 export const CACHE_WALLPAPER = 'public, max-age=86400';
 
-const WALLPAPER_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const WALLPAPER_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -53,6 +62,7 @@ const MIME = {
   '.txt': 'text/plain; charset=utf-8',
   '.map': 'application/json; charset=utf-8',
   '.webp': 'image/webp',
+  '.gif': 'image/gif',
 };
 
 /**
@@ -221,7 +231,389 @@ export function readBodyLimited(req, maxBytes) {
 }
 
 /**
- * List wallpaper images under state/wallpapers (jpg/png/webp only).
+ * Read raw request body as Buffer up to maxBytes (413 when exceeded).
+ * @param {import('node:http').IncomingMessage} req
+ * @param {number} maxBytes
+ * @returns {Promise<{ ok: true, buf: Buffer } | { ok: false, status: number, error: string }>}
+ */
+export function readBodyBufferLimited(req, maxBytes) {
+  return new Promise((resolve) => {
+    const cl = req.headers['content-length'];
+    if (cl != null && Number(cl) > maxBytes) {
+      req.resume();
+      resolve({ ok: false, status: 413, error: 'payload_too_large' });
+      return;
+    }
+    /** @type {Buffer[]} */
+    const chunks = [];
+    let total = 0;
+    let settled = false;
+    function done(result) {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    }
+    req.on('data', (chunk) => {
+      if (settled) return;
+      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      total += buf.length;
+      if (total > maxBytes) {
+        req.resume();
+        done({ ok: false, status: 413, error: 'payload_too_large' });
+        return;
+      }
+      chunks.push(buf);
+    });
+    req.on('end', () => {
+      if (settled) return;
+      done({ ok: true, buf: Buffer.concat(chunks) });
+    });
+    req.on('error', () => {
+      done({ ok: false, status: 400, error: 'bad_body' });
+    });
+  });
+}
+
+/**
+ * Detect image type from magic bytes. Returns lowercase ext with leading dot.
+ * @param {Buffer} buf
+ * @returns {'.jpg'|'.png'|'.webp'|'.gif'|null}
+ */
+export function detectImageMagic(buf) {
+  if (!Buffer.isBuffer(buf) || buf.length < 3) return null;
+  // JPEG
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return '.jpg';
+  // PNG
+  if (
+    buf.length >= 8 &&
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
+  ) {
+    return '.png';
+  }
+  // GIF87a / GIF89a
+  if (
+    buf.length >= 6 &&
+    buf[0] === 0x47 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x38 &&
+    (buf[4] === 0x37 || buf[4] === 0x39) &&
+    buf[5] === 0x61
+  ) {
+    return '.gif';
+  }
+  // WEBP: RIFF....WEBP
+  if (
+    buf.length >= 12 &&
+    buf[0] === 0x52 &&
+    buf[1] === 0x49 &&
+    buf[2] === 0x46 &&
+    buf[3] === 0x46 &&
+    buf[8] === 0x57 &&
+    buf[9] === 0x45 &&
+    buf[10] === 0x42 &&
+    buf[11] === 0x50
+  ) {
+    return '.webp';
+  }
+  return null;
+}
+
+/**
+ * Whether claimed extension matches detected magic (jpeg aliases .jpg).
+ * @param {string} claimedExt e.g. ".jpeg"
+ * @param {string|null} magicExt e.g. ".jpg"
+ */
+export function magicMatchesExt(claimedExt, magicExt) {
+  if (!magicExt) return false;
+  const c = String(claimedExt || '').toLowerCase();
+  const m = String(magicExt).toLowerCase();
+  if (c === m) return true;
+  if ((c === '.jpg' || c === '.jpeg') && m === '.jpg') return true;
+  return false;
+}
+
+/**
+ * Sanitize a filename into a short filesystem-safe slug (no ext).
+ * Rejects empty / injection-only names via returning null.
+ * @param {unknown} rawHeader X-Filename value
+ * @returns {{ ok: true, slug: string, ext: string } | { ok: false, error: string }}
+ */
+export function parseUploadFilename(rawHeader) {
+  if (rawHeader == null || rawHeader === '') {
+    return { ok: false, error: 'missing_filename' };
+  }
+  let raw = String(rawHeader);
+  // Reject null bytes and absurd length before any path work.
+  if (raw.includes('\0')) {
+    return { ok: false, error: 'invalid_filename' };
+  }
+  if (raw.length > 512) {
+    return { ok: false, error: 'filename_too_long' };
+  }
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {
+    return { ok: false, error: 'invalid_filename' };
+  }
+  if (raw.includes('\0')) {
+    return { ok: false, error: 'invalid_filename' };
+  }
+  // Reject path injection / traversal; only pure basenames accepted.
+  // (Brief says "仅取 basename" — we require the client already sent a basename.)
+  if (
+    raw.includes('/') ||
+    raw.includes('\\') ||
+    raw.includes('..') ||
+    raw === '.' ||
+    raw === '..'
+  ) {
+    return { ok: false, error: 'invalid_filename' };
+  }
+  const base = path.basename(raw);
+  if (base !== raw || !base) {
+    return { ok: false, error: 'invalid_filename' };
+  }
+  const ext = path.extname(base).toLowerCase();
+  if (!UPLOAD_EXTS.has(ext)) {
+    return { ok: false, error: 'invalid_extension' };
+  }
+  let stem = base.slice(0, base.length - ext.length);
+  // Keep alnum / . _ - ; collapse everything else to _
+  stem = stem.replace(/[^\w.\-]+/g, '_').replace(/_+/g, '_');
+  stem = stem.replace(/^[._\-]+|[._\-]+$/g, '');
+  if (!stem) stem = 'image';
+  // Cap slug length (final name stays well under common NAME_MAX)
+  if (stem.length > 80) stem = stem.slice(0, 80);
+  return { ok: true, slug: stem, ext };
+}
+
+/**
+ * Build final stored basename: YYYYMMDD-HHMMSS-<slug>.<ext>
+ * @param {string} slug
+ * @param {string} ext with leading dot
+ * @param {Date} [now]
+ * @returns {string}
+ */
+export function buildUploadStoredName(slug, ext, now = new Date()) {
+  const d = now instanceof Date ? now : new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp =
+    `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}` +
+    `-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+  const e = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`;
+  // Normalize jpeg → jpg in stored names for consistency with magic
+  const storedExt = e === '.jpeg' ? '.jpg' : e;
+  const safeSlug = String(slug || 'image').replace(/[^\w.\-]+/g, '_') || 'image';
+  return `${stamp}-${safeSlug}${storedExt}`;
+}
+
+/**
+ * Atomically write buffer to destDir/finalName via O_EXCL tmp + rename.
+ * Cleans up tmp on any failure. Retries final name on rare collisions.
+ *
+ * @param {string} destDir
+ * @param {string} finalName basename
+ * @param {Buffer} buf
+ * @returns {Promise<{ ok: true, name: string, path: string } | { ok: false, status: number, error: string }>}
+ */
+export async function writeUploadAtomic(destDir, finalName, buf) {
+  await fs.mkdir(destDir, { recursive: true });
+  let rootReal;
+  try {
+    rootReal = path.resolve(await fs.realpath(destDir));
+  } catch {
+    return { ok: false, status: 500, error: 'upload_dir_missing' };
+  }
+
+  let name = path.basename(finalName);
+  if (name !== finalName || name.includes('..') || name.includes('\0')) {
+    return { ok: false, status: 400, error: 'invalid_filename' };
+  }
+
+  const maxAttempts = 32;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    const tryName =
+      attempt === 0
+        ? name
+        : name.replace(/(\.[^.]+)$/, `-${attempt}$1`);
+    const dest = path.join(rootReal, tryName);
+    // Lexical containment
+    const prefix = rootReal.endsWith(path.sep) ? rootReal : rootReal + path.sep;
+    if (!dest.startsWith(prefix)) {
+      return { ok: false, status: 400, error: 'invalid_filename' };
+    }
+
+    const tmpName = `.upload-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}.tmp`;
+    const tmpPath = path.join(rootReal, tmpName);
+    if (!tmpPath.startsWith(prefix)) {
+      return { ok: false, status: 500, error: 'tmp_path_error' };
+    }
+
+    let fd = null;
+    try {
+      fd = fsSync.openSync(
+        tmpPath,
+        fsSync.constants.O_WRONLY |
+          fsSync.constants.O_CREAT |
+          fsSync.constants.O_EXCL,
+        0o640
+      );
+      const st = fsSync.fstatSync(fd);
+      if (!st.isFile()) {
+        fsSync.closeSync(fd);
+        fd = null;
+        try {
+          fsSync.unlinkSync(tmpPath);
+        } catch {
+          /* ignore */
+        }
+        return { ok: false, status: 400, error: 'not_regular_file' };
+      }
+      fsSync.writeSync(fd, buf, 0, buf.length, 0);
+      fsSync.fsyncSync(fd);
+      fsSync.closeSync(fd);
+      fd = null;
+
+      try {
+        fsSync.renameSync(tmpPath, dest);
+      } catch (err) {
+        // Collision on final name — clean tmp and retry with suffix
+        try {
+          fsSync.unlinkSync(tmpPath);
+        } catch {
+          /* ignore */
+        }
+        if (/** @type {NodeJS.ErrnoException} */ (err).code === 'EEXIST') {
+          continue;
+        }
+        // On Linux rename overwrites; EEXIST is rare. Other errors: surface.
+        return { ok: false, status: 500, error: 'rename_failed' };
+      }
+
+      // If dest already existed and rename overwrote, that's fine for unique
+      // timestamped names. Verify regular file.
+      try {
+        const dstSt = fsSync.statSync(dest);
+        if (!dstSt.isFile()) {
+          try {
+            fsSync.unlinkSync(dest);
+          } catch {
+            /* ignore */
+          }
+          return { ok: false, status: 400, error: 'not_regular_file' };
+        }
+      } catch {
+        return { ok: false, status: 500, error: 'stat_failed' };
+      }
+
+      return { ok: true, name: tryName, path: dest };
+    } catch (err) {
+      if (fd != null) {
+        try {
+          fsSync.closeSync(fd);
+        } catch {
+          /* ignore */
+        }
+      }
+      try {
+        fsSync.unlinkSync(tmpPath);
+      } catch {
+        /* ignore */
+      }
+      if (/** @type {NodeJS.ErrnoException} */ (err).code === 'EEXIST') {
+        // tmp collision — retry
+        continue;
+      }
+      return {
+        ok: false,
+        status: 500,
+        error: /** @type {Error} */ (err).message || 'write_failed',
+      };
+    }
+  }
+  return { ok: false, status: 500, error: 'could_not_create_unique_file' };
+}
+
+/**
+ * Validate and store an image upload.
+ * @param {{
+ *   target: 'chat'|'wallpaper',
+ *   rawFilename: unknown,
+ *   body: Buffer,
+ *   chatUploadDir: string,
+ *   stateDir: string,
+ *   readonly: boolean,
+ *   now?: Date,
+ * }} opts
+ * @returns {Promise<
+ *   | { ok: true, status: 200, body: { path: string } | { name: string } }
+ *   | { ok: false, status: number, error: string }
+ * >}
+ */
+export async function handleImageUpload(opts) {
+  const target = opts.target;
+  if (target !== 'chat' && target !== 'wallpaper') {
+    return { ok: false, status: 400, error: 'invalid_target' };
+  }
+  if (opts.readonly && target === 'chat') {
+    return { ok: false, status: 403, error: 'readonly' };
+  }
+  if (!Buffer.isBuffer(opts.body) || opts.body.length === 0) {
+    return { ok: false, status: 400, error: 'empty_body' };
+  }
+  if (opts.body.length > UPLOAD_MAX_BYTES) {
+    return { ok: false, status: 413, error: 'payload_too_large' };
+  }
+
+  const parsed = parseUploadFilename(opts.rawFilename);
+  if (!parsed.ok) {
+    return { ok: false, status: 400, error: parsed.error };
+  }
+
+  const magic = detectImageMagic(opts.body);
+  if (!magicMatchesExt(parsed.ext, magic)) {
+    return { ok: false, status: 400, error: 'magic_mismatch' };
+  }
+
+  // Prefer magic-normalized ext for stored name (jpeg→jpg already in builder)
+  const stored = buildUploadStoredName(
+    parsed.slug,
+    parsed.ext === '.jpeg' ? '.jpg' : parsed.ext,
+    opts.now
+  );
+
+  // Wallpaper names must also pass isSafeWallpaperName (basename + whitelist)
+  if (target === 'wallpaper' && !isSafeWallpaperName(stored)) {
+    return { ok: false, status: 400, error: 'invalid_filename' };
+  }
+
+  const destDir =
+    target === 'chat'
+      ? opts.chatUploadDir
+      : path.join(opts.stateDir, 'wallpapers');
+
+  const written = await writeUploadAtomic(destDir, stored, opts.body);
+  if (!written.ok) {
+    return { ok: false, status: written.status, error: written.error };
+  }
+
+  if (target === 'chat') {
+    // Absolute path on disk (prod: /srv/term-uploads/<name>)
+    return { ok: true, status: 200, body: { path: written.path } };
+  }
+  return { ok: true, status: 200, body: { name: written.name } };
+}
+
+/**
+ * List wallpaper images under state/wallpapers (jpg/png/webp/gif).
  * @param {string} stateDir
  * @returns {Promise<Array<{ name: string, size: number }>>}
  */
@@ -392,6 +784,7 @@ export async function resolveStatic(urlPath, publicDir = PUBLIC_DIR) {
  *   client?: ReturnType<typeof createClient>,
  *   readonly?: boolean,
  *   assetVersion?: string,
+ *   chatUploadDir?: string,
  * }} [options]
  */
 export async function startServer(options = {}) {
@@ -399,6 +792,10 @@ export async function startServer(options = {}) {
   const port = Number(options.port ?? process.env.PT2_PORT ?? 7690);
   const stateDir = options.stateDir ?? STATE_DIR;
   const publicDir = options.publicDir ?? PUBLIC_DIR;
+  const chatUploadDir =
+    options.chatUploadDir ??
+    process.env.PT2_CHAT_UPLOAD_DIR ??
+    DEFAULT_CHAT_UPLOAD_DIR;
   const readonly =
     options.readonly === true ||
     process.env.PT2_READONLY === '1' ||
@@ -577,6 +974,45 @@ export async function startServer(options = {}) {
       } catch (err) {
         sendJson(res, 500, { error: err?.message || 'seen failed' });
       }
+      return;
+    }
+
+    // --- image upload (M2-P1) ---
+    if (pathname === '/herd/api/upload' && method === 'POST') {
+      if (!isSameOriginWrite(req)) {
+        sendJson(res, 403, { error: 'cross_origin' });
+        return;
+      }
+      const targetRaw = String(url.searchParams.get('target') || '').trim();
+      if (targetRaw !== 'chat' && targetRaw !== 'wallpaper') {
+        sendJson(res, 400, { error: 'invalid_target' });
+        return;
+      }
+      // Content-Length early reject (also re-checked while streaming)
+      const clHdr = req.headers['content-length'];
+      if (clHdr != null && Number(clHdr) > UPLOAD_MAX_BYTES) {
+        req.resume();
+        sendJson(res, 413, { error: 'payload_too_large' });
+        return;
+      }
+      const body = await readBodyBufferLimited(req, UPLOAD_MAX_BYTES);
+      if (!body.ok) {
+        sendJson(res, body.status, { error: body.error });
+        return;
+      }
+      const result = await handleImageUpload({
+        target: /** @type {'chat'|'wallpaper'} */ (targetRaw),
+        rawFilename: req.headers['x-filename'],
+        body: body.buf,
+        chatUploadDir,
+        stateDir,
+        readonly,
+      });
+      if (!result.ok) {
+        sendJson(res, result.status, { error: result.error });
+        return;
+      }
+      sendJson(res, result.status, result.body);
       return;
     }
 

@@ -80,6 +80,7 @@ describe('pure: wallpaper name + settings validation', () => {
     assert.equal(isSafeWallpaperName('a.PNG'), true);
     assert.equal(isSafeWallpaperName('x.webp'), true);
     assert.equal(isSafeWallpaperName('foo.jpeg'), true);
+    assert.equal(isSafeWallpaperName('anim.gif'), true);
     assert.equal(isSafeWallpaperName('../etc/passwd'), false);
     assert.equal(isSafeWallpaperName('a/b.jpg'), false);
     assert.equal(isSafeWallpaperName('..'), false);
@@ -171,7 +172,7 @@ describe('listWallpapers / resolveWallpaperFile (fs)', () => {
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('lists only jpg/png/webp with sizes', async () => {
+  it('lists only jpg/png/webp/gif with sizes', async () => {
     const list = await listWallpapers(stateDir);
     const names = list.map((x) => x.name).sort();
     assert.deepEqual(names, ['extra.png', 'kimetsu-01.jpg']);

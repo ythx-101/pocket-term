@@ -649,6 +649,44 @@ html.has-wallpaper .topbar {
   align-items: flex-end;
   gap: 0.45rem;
 }
+.attach-btn {
+  appearance: none;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 1.15rem;
+  line-height: 1;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+}
+.attach-btn:active:not(:disabled) {
+  opacity: 0.75;
+}
+.attach-btn:disabled,
+.attach-btn.uploading {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 .composer-input {
   flex: 1;
   min-height: 40px;
@@ -844,14 +882,44 @@ body.chat-open .toast-host {
   line-height: 1;
 }
 .wallpaper-panel {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 0.55rem;
   margin-top: 0.65rem;
   padding-top: 0.15rem;
 }
 .wallpaper-panel.hidden {
   display: none !important;
+}
+.wallpaper-panel-toolbar {
+  display: flex;
+  align-items: center;
+}
+.add-wallpaper-btn {
+  appearance: none;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  border-radius: 999px;
+  min-height: 36px;
+  padding: 0 0.9rem;
+  cursor: pointer;
+}
+.add-wallpaper-btn:active:not(:disabled) {
+  opacity: 0.8;
+}
+.add-wallpaper-btn:disabled,
+.add-wallpaper-btn.uploading {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.wallpaper-panel-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.55rem;
 }
 .wallpaper-option {
   appearance: none;
