@@ -328,7 +328,9 @@ describe('spa static via bridge', () => {
     assert.match(html, /class="hotkey-bar"/);
     assert.match(html, /data-hotkey="esc"/);
     assert.match(html, /data-hotkey="ctrl-c"/);
-    assert.match(html, /data-hotkey="enter"/);
+    assert.match(html, /data-hotkey="up"[^>]*>↑<\/button>/);
+    assert.match(html, /data-hotkey="down"[^>]*>↓<\/button>/);
+    assert.doesNotMatch(html, /data-hotkey="enter"/);
     // CSS still carries safe-area + circular send + docked attach.
     const cssRes = await fetch(`${base}/herd/style.css`);
     assert.equal(cssRes.status, 200);

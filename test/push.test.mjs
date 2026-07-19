@@ -48,6 +48,21 @@ describe('push subscription service', () => {
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 
+  it('recovers the persistence queue after one atomic write rejection', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-push-recover-'));
+    const dir = path.join(root, 'state');
+    try {
+      await fs.writeFile(dir, 'blocks mkdir');
+      const service = await createPushService({ stateDir: dir, config, sender: async () => {} });
+      await assert.rejects(service.subscribe(subscription));
+      await fs.unlink(dir);
+      await fs.mkdir(dir);
+      assert.equal((await service.subscribe(subscription)).ok, true);
+      const stored = JSON.parse(await fs.readFile(path.join(dir, 'push-subscriptions.json'), 'utf8'));
+      assert.equal(stored.subscriptions.length, 1);
+    } finally { await fs.rm(root, { recursive: true, force: true }); }
+  });
+
   it('prunes only 404/410 and retains transient failures', async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-push-send-'));
     try {
@@ -59,6 +74,26 @@ describe('push subscription service', () => {
       statusCode = 503;
       assert.equal((await service.dispatch({ paneId: 'w9:p1', status: 'blocked' })).pruned, 0);
       assert.equal(service._count(), 1);
+    } finally { await fs.rm(dir, { recursive: true, force: true }); }
+  });
+
+  it('truncates an oversized Unicode body and still sends valid bounded JSON', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-push-payload-'));
+    let delivered = null;
+    try {
+      const service = await createPushService({
+        stateDir: dir,
+        config,
+        sender: async (_subscription, payload) => { delivered = payload; },
+      });
+      await service.subscribe(subscription);
+      const result = await service.dispatch({ paneId: 'w9:p1', status: 'done', title: '完成😀'.repeat(2000) });
+      assert.deepEqual(result, { sent: 1, failed: 0, pruned: 0 });
+      assert.ok(Buffer.byteLength(delivered) <= 3000);
+      const parsed = JSON.parse(delivered);
+      assert.equal(parsed.status, 'done');
+      assert.match(parsed.body, /…$/);
+      assert.ok(!parsed.body.includes('\uFFFD'));
     } finally { await fs.rm(dir, { recursive: true, force: true }); }
   });
 });
