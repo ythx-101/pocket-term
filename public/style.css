@@ -251,10 +251,16 @@ body {
   color: var(--warn);
   text-align: center;
   padding: 0.4rem 0.75rem;
-  /* Banner sits above the topbar when visible, so it owns the top inset. */
+  /* Safe-area single ownership: while visible, the banner is the topmost
+     element and owns the top inset; the sibling rule below strips it from
+     the topbar. Hidden banner → .topbar owns the inset again. */
   padding-top: max(0.4rem, env(safe-area-inset-top, 0px));
   font-size: var(--fs-sm);
   border-bottom: 1px solid var(--border);
+}
+
+#banner-herdr:not(.hidden) ~ .view .topbar {
+  padding-top: 0.5rem;
 }
 
 /* —— chat list rows —— */

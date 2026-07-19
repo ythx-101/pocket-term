@@ -68,6 +68,48 @@ describe('diffNewText', () => {
   });
 });
 
+describe('review fixes: OSC ST termination + indented frames', () => {
+  const ESC = String.fromCharCode(27);
+  const BEL = String.fromCharCode(7);
+
+  it('stripAnsi removes ST-terminated OSC (ESC \\) without leaking bytes', () => {
+    const raw = `${ESC}]0;window title${ESC}\\after`;
+    const out = stripAnsi(raw);
+    assert.equal(out, 'after');
+    assert.equal(/[\u0000-\u0008\u000b-\u001f]/.test(out), false);
+  });
+
+  it('stripAnsi still removes BEL-terminated OSC', () => {
+    assert.equal(stripAnsi(`${ESC}]2;title${BEL}kept`), 'kept');
+  });
+
+  it('stripAnsi drops unterminated OSC fragment without control bytes', () => {
+    const out = stripAnsi(`${ESC}]0;partial title slice`);
+    assert.equal(/[\u0000-\u0008\u000b-\u001f]/.test(out), false);
+    assert.equal(out.includes('partial title'), false);
+  });
+
+  it('stripAnsi: ST-terminated OSC followed by CSI color', () => {
+    const raw = `${ESC}]0;t${ESC}\\${ESC}[32mok${ESC}[0m`;
+    assert.equal(stripAnsi(raw), 'ok');
+  });
+
+  it('cleanStreamLines: indented CJK frame lines lose frame, keep text', () => {
+    assert.deepEqual(cleanStreamLines(['  │ 中文内容 │']), ['中文内容']);
+    assert.deepEqual(
+      cleanStreamLines(['  ╭──────╮', '  │ 你好 │', '  ╰──────╯']),
+      ['你好']
+    );
+  });
+
+  it('stripFrameBorders: indentation before a border is frame padding', () => {
+    assert.equal(stripFrameBorders('  │ 中文内容 │'), '中文内容');
+    assert.equal(stripFrameBorders('  │ a │ b │'), 'a │ b');
+    // borderless indented lines keep their indentation (code blocks)
+    assert.equal(stripFrameBorders('    code line'), '    code line');
+  });
+});
+
 describe('frame / decorative-line cleaning (Tier B display)', () => {
   it('isDecorativeLine: pure box-drawing lines only', () => {
     assert.equal(isDecorativeLine('────────────'), true);
