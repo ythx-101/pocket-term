@@ -90,23 +90,45 @@ export function agentAvatar(agent) {
 }
 
 /**
- * Status display: color class + Chinese aria label.
+ * Status display: color class + Chinese aria label + micro key for list.
+ * Color mapping: idle=灰 working=绿(脉动) blocked=红 done=蓝 unknown=暗.
  * @param {string|null|undefined} status
- * @returns {{ cls: string, label: string }}
+ * @returns {{ cls: string, label: string, key: string }}
  */
 export function statusMeta(status) {
   switch (status) {
     case 'working':
-      return { cls: 'st-working', label: '工作中' };
+      return { cls: 'st-working', label: '工作中', key: 'working' };
     case 'blocked':
-      return { cls: 'st-blocked', label: '等待回复' };
+      return { cls: 'st-blocked', label: '等待回复', key: 'blocked' };
     case 'done':
-      return { cls: 'st-done', label: '已完成' };
+      return { cls: 'st-done', label: '已完成', key: 'done' };
     case 'idle':
-      return { cls: 'st-idle', label: '空闲' };
+      return { cls: 'st-idle', label: '空闲', key: 'idle' };
     default:
-      return { cls: 'st-unknown', label: '未知' };
+      return { cls: 'st-unknown', label: '未知', key: 'unknown' };
   }
+}
+
+/**
+ * Pure status → CSS color class for the avatar status-dot.
+ * @param {string|null|undefined} status
+ * @returns {string} e.g. 'st-working'
+ */
+export function statusDotClass(status) {
+  return statusMeta(status).cls;
+}
+
+/**
+ * CSS class list for a chat-list row (blocked left-edge pin marker).
+ * @param {Pane|null|undefined} pane
+ * @returns {string}
+ */
+export function paneRowClass(pane) {
+  const parts = ['row'];
+  if (pane?.agent_status === 'blocked') parts.push('row-blocked');
+  if (pane?.unread) parts.push('row-unread');
+  return parts.join(' ');
 }
 
 /**

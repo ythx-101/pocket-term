@@ -25,13 +25,6 @@
         herdr 已断开 · 正在重连…
       </div>
 
-      <!-- in-app notification banner (M2.5): click jumps to the pane -->
-      <div id="banner-notify" class="banner notify hidden" role="status">
-        <a id="banner-notify-link" class="banner-notify-link" href="#/chats">
-          <span id="banner-notify-text"></span>
-        </a>
-      </div>
-
       <!-- 会话列表 -->
       <section id="view-chats" class="view" data-view="chats">
         <header class="topbar">
@@ -298,32 +291,32 @@
           <div class="settings-group">
             <div class="settings-label">通知</div>
             <label class="toggle-row">
-              <span>等你回复通知</span>
+              <span>等你回复（系统推送）</span>
               <input
                 id="toggle-notify-blocked"
                 type="checkbox"
                 role="switch"
-                aria-label="等你回复通知"
+                aria-label="等你回复系统推送"
               />
             </label>
             <label class="toggle-row">
-              <span>完成通知</span>
+              <span>完成（系统推送）</span>
               <input
                 id="toggle-notify-done"
                 type="checkbox"
                 role="switch"
-                aria-label="完成通知"
+                aria-label="完成系统推送"
               />
             </label>
             <p class="settings-hint">
-              页内通知：顶部横幅 + 「会话」角标；仅本机浏览器，打开会话即清除
+              页内不再弹横幅，状态见会话列表（色点 / 红竖条）；「会话」角标仍提示未读。以上开关仅作用于系统 Web Push（网页关着时）
             </p>
             <div class="push-settings">
               <button id="btn-enable-push" class="push-enable-btn" type="button">
                 启用系统通知（Web Push）
               </button>
               <div id="push-diagnostic" class="push-diagnostic" role="status" aria-live="polite">
-                尚未检测；不支持或启用失败时，页内通知继续生效。
+                尚未检测；状态始终显示在会话列表。
               </div>
             </div>
           </div>

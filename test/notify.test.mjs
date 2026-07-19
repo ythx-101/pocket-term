@@ -534,31 +534,34 @@ describe('notify: reconnect re-baseline (review fix)', () => {
   });
 });
 
-describe('notify: SPA wiring (static source)', () => {
+describe('notify: SPA wiring (static source) — M2.6 no top banner', () => {
   let html;
   let appJs;
   let css;
+  let spaUtils;
 
   before(async () => {
     const pub = path.join(__dirname, '..', 'public');
     html = await fs.readFile(path.join(pub, 'index.html'), 'utf8');
     appJs = await fs.readFile(path.join(pub, 'app.js'), 'utf8');
     css = await fs.readFile(path.join(pub, 'style.css'), 'utf8');
+    spaUtils = await fs.readFile(path.join(pub, 'spa-utils.js'), 'utf8');
   });
 
-  it('index.html has clickable banner, tab badge, and both toggles', () => {
-    assert.match(html, /id="banner-notify"/);
-    assert.match(html, /id="banner-notify-link"[^>]*href=/);
-    assert.match(html, /id="banner-notify-text"/);
+  it('index.html has no top banner; keeps tab badge, blocked-bar, and push toggles', () => {
+    assert.doesNotMatch(html, /id="banner-notify"/);
+    assert.doesNotMatch(html, /banner-notify-link/);
+    assert.doesNotMatch(html, /banner-notify-text/);
     assert.match(html, /id="tab-badge-chats"/);
+    assert.match(html, /id="blocked-bar"/);
     assert.match(html, /id="toggle-notify-blocked"[^>]*role="switch"/s);
     assert.match(html, /id="toggle-notify-done"[^>]*role="switch"/s);
-    assert.match(html, /等你回复通知/);
-    assert.match(html, /完成通知/);
-    assert.match(html, /页内通知/);
+    assert.match(html, /系统 Web Push|系统推送/);
+    assert.match(html, /页内不再弹横幅/);
+    assert.match(html, /状态见会话列表/);
   });
 
-  it('app.js wires reducer into state apply and consume into pane open', () => {
+  it('app.js wires reducer + tab badge only (no banner DOM)', () => {
     assert.match(appJs, /reduceNotifications/);
     assert.match(appJs, /function applyState[\s\S]*?reduceNotifications\(/);
     assert.match(
@@ -570,7 +573,9 @@ describe('notify: SPA wiring (static source)', () => {
     assert.match(appJs, /#toggle-notify-blocked/);
     assert.match(appJs, /#toggle-notify-done/);
     assert.match(appJs, /formatNotifyBadge/);
-    assert.match(appJs, /notifyBannerView/);
+    assert.match(appJs, /paneRowClass/);
+    assert.doesNotMatch(appJs, /banner-notify/);
+    assert.doesNotMatch(appJs, /notifyBannerView/);
   });
 
   it('app.js rebaselines notifications on both reconnect paths', () => {
@@ -584,31 +589,44 @@ describe('notify: SPA wiring (static source)', () => {
     );
   });
 
-  it('style.css styles banner variants, badge, and safe-area ownership', () => {
-    assert.match(css, /\.banner\.notify\s*\{/);
-    assert.match(css, /\.banner\.notify\.done\s*\{/);
+  it('style.css: list status (no banner-notify); blocked red bar; status dots', () => {
+    assert.doesNotMatch(css, /#banner-notify/);
+    assert.doesNotMatch(css, /\.banner-notify-link/);
+    assert.doesNotMatch(css, /\.banner\.notify/);
     assert.match(css, /\.tab-badge\s*\{/);
-    assert.match(css, /#banner-notify:not\(\.hidden\) ~ \.view \.topbar/);
-    assert.match(css, /\.banner-notify-link[\s\S]*?safe-area-inset-top/);
+    assert.match(css, /\.row\.row-blocked/);
+    assert.match(css, /\.st-working/);
+    assert.match(css, /\.st-blocked/);
+    assert.match(css, /\.st-done/);
+    assert.match(css, /\.st-idle/);
+    assert.match(css, /@keyframes breathe/);
+    assert.match(css, /\.unread-dot/);
+    assert.match(css, /\.row-status-label/);
   });
 
-  it('keeps the in-app fallback while Web Push is additive', async () => {
+  it('chat list uses status dots + blocked pin class; keeps blocked-bar in chat', () => {
+    assert.match(appJs, /paneRowClass\(p\)/);
+    assert.match(appJs, /status-dot \$\{st\.cls\}/);
+    assert.match(appJs, /row-status-label/);
+    assert.match(appJs, /#blocked-bar/);
+    assert.match(spaUtils, /export function paneRowClass/);
+    assert.match(spaUtils, /export function statusDotClass/);
+  });
+
+  it('Web Push remains additive; sw.js untouched as orthogonal', async () => {
     const root = path.join(__dirname, '..');
     const sources = {
       'public/index.html': html,
       'public/app.js': appJs,
       'public/style.css': css,
-      'public/spa-utils.js': await fs.readFile(
-        path.join(root, 'public', 'spa-utils.js'),
-        'utf8'
-      ),
+      'public/spa-utils.js': spaUtils,
       'server.js': await fs.readFile(path.join(root, 'server.js'), 'utf8'),
     };
     assert.match(sources['public/app.js'], /reduceNotifications/);
     assert.match(sources['public/app.js'], /requestPermission/);
     assert.match(sources['public/app.js'], /serviceWorker\.register/);
     assert.match(sources['public/index.html'], /id="btn-enable-push"/);
-    assert.match(sources['public/index.html'], /页内通知继续生效/);
+    assert.match(sources['public/index.html'], /状态始终显示在会话列表|状态见会话列表/);
     assert.match(sources['server.js'], /push\/vapid-public/);
     assert.equal((await fs.readdir(path.join(root, 'public'))).includes('sw.js'), true);
   });

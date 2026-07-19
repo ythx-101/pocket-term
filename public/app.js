@@ -7,6 +7,7 @@ import {
   mapBubbleToView,
   agentAvatar,
   statusMeta,
+  paneRowClass,
   paneTitle,
   groupContacts,
   parseRoute,
@@ -34,9 +35,7 @@ import {
   rebaselineNotifyState,
   consumePaneNotifications,
   pendingNotifyCount,
-  latestPendingNotification,
   formatNotifyBadge,
-  notifyBannerView,
   parseNotifyToggle,
   vapidKeyToBytes,
   shouldRecoverLifecycle,
@@ -133,7 +132,7 @@ function renderPushDiagnostic(lines, kind = '') {
 
 function diagnosticError(stage, err) {
   const name = err?.name ? `${err.name}: ` : '';
-  return `${stage}失败 — ${name}${err?.message || String(err || '未知错误')}\n结论：Web Push 未启用；页内通知继续生效。`;
+  return `${stage}失败 — ${name}${err?.message || String(err || '未知错误')}\n结论：Web Push 未启用；状态仍见会话列表。`;
 }
 
 async function enableWebPush() {
@@ -195,7 +194,7 @@ async function enableWebPush() {
     const saveBody = await saveRes.json().catch(() => ({}));
     if (!saveRes.ok) throw new Error(`订阅登记 HTTP ${saveRes.status} (${saveBody.error || 'unknown'})`);
     steps.push('✓ 服务端登记成功');
-    steps.push('结论：Web Push 已启用；页内通知仍保留为兜底。');
+    steps.push('结论：Web Push 已启用；页内状态见会话列表，不再弹横幅。');
     renderPushDiagnostic(steps, 'ok');
   } catch (err) {
     renderPushDiagnostic([...steps, diagnosticError(stage, err)], 'err');
@@ -220,7 +219,7 @@ function getNotifyPrefs() {
   };
 }
 
-/** Render notification banner + 会话 tab badge from notifyState. */
+/** Render 会话 tab unread badge from notifyState (no top banner — M2.6). */
 function renderNotifyUI() {
   const badge = $('#tab-badge-chats');
   if (badge) {
@@ -236,23 +235,6 @@ function renderNotifyUI() {
       n > 0 ? `会话，${n} 条新通知` : '会话'
     );
   }
-
-  const banner = $('#banner-notify');
-  const link = /** @type {HTMLAnchorElement|null} */ ($('#banner-notify-link'));
-  const textEl = $('#banner-notify-text');
-  if (!banner || !link || !textEl) return;
-  const latest = latestPendingNotification(notifyState);
-  const view = latest ? notifyBannerView(latest, getPane(latest.paneId)) : null;
-  if (!view) {
-    banner.classList.add('hidden');
-    banner.classList.remove('done');
-    return;
-  }
-  banner.classList.remove('hidden');
-  banner.classList.toggle('done', view.status === 'done');
-  link.setAttribute('href', view.href);
-  link.setAttribute('aria-label', `打开会话：${view.text}`);
-  textEl.textContent = view.text;
 }
 
 /**
@@ -1062,7 +1044,7 @@ function renderChatList() {
     const st = statusMeta(p.agent_status);
     const title = paneTitle(p);
     const row = el('a', {
-      className: 'row',
+      className: paneRowClass(p),
       href: `#/chat/${encodeURIComponent(p.pane_id)}`,
       role: 'listitem',
     });
@@ -1078,17 +1060,19 @@ function renderChatList() {
         'aria-label': st.label,
       })
     );
-    const summary = el('div', { className: 'row-summary' });
-    if (p.agent_status === 'blocked') {
-      summary.append(
-        el('span', { className: 'row-badge blocked', text: '[等你回复]' })
-      );
-    } else if (p.agent_status === 'working') {
-      summary.append(
-        el('span', { className: 'row-badge working', text: '[进行中]' })
-      );
-    }
-    summary.append(document.createTextNode(p.summary || '暂无摘要'));
+    // Color is primary; micro key under avatar avoids crowding the summary.
+    const avatarCol = el('div', { className: 'row-avatar-col' }, [
+      avatar,
+      el('span', {
+        className: `row-status-label ${st.cls}`,
+        text: st.key,
+        'aria-hidden': 'true',
+      }),
+    ]);
+    const summary = el('div', {
+      className: 'row-summary',
+      text: p.summary || '暂无摘要',
+    });
     const main = el('div', { className: 'row-main' }, [
       el('div', { className: 'row-title', text: title }),
       summary,
@@ -1098,9 +1082,10 @@ function renderChatList() {
         className: 'row-time',
         text: formatRelativeTime(p.last_activity, now),
       }),
+      // done unread: blue status-dot + red unread badge
       p.unread ? el('div', { className: 'unread-dot', 'aria-label': '未读' }) : null,
     ]);
-    row.append(avatar, main, meta);
+    row.append(avatarCol, main, meta);
     root.append(row);
   }
 }
@@ -1421,10 +1406,11 @@ function applyState(next) {
   updateHerdrAbout();
   updateComposerVisibility();
   if (next != null) {
+    // Tab badge always tracks blocked/done edges; Me toggles are Web Push only (M2.6).
     const reduced = reduceNotifications(
       notifyState,
       next.panes || [],
-      getNotifyPrefs(),
+      {},
       Date.now()
     );
     notifyState = reduced.state;
@@ -1627,7 +1613,7 @@ function wire() {
     updateComposerVisibility();
   });
 
-  // Notification toggles (M2.5): affect future emissions only.
+  // Notification toggles (M2.6): Web Push intent only — list status is always on.
   $('#toggle-notify-blocked')?.addEventListener('change', (ev) => {
     const on = /** @type {HTMLInputElement} */ (ev.target).checked;
     localStorage.setItem(LS_NOTIFY_BLOCKED, on ? '1' : '0');

@@ -24,6 +24,8 @@ import {
   mapBubbleToView,
   agentAvatar,
   statusMeta,
+  statusDotClass,
+  paneRowClass,
   paneTitle,
   groupContacts,
   parseRoute,
@@ -134,6 +136,32 @@ describe('spa pure: avatar / status / route / contacts', () => {
   it('statusMeta labels in Chinese', () => {
     assert.equal(statusMeta('working').label, '工作中');
     assert.equal(statusMeta('blocked').cls, 'st-blocked');
+  });
+
+  it('statusDotClass maps idle/working/blocked/done/unknown to color classes', () => {
+    assert.equal(statusDotClass('idle'), 'st-idle');
+    assert.equal(statusDotClass('working'), 'st-working');
+    assert.equal(statusDotClass('blocked'), 'st-blocked');
+    assert.equal(statusDotClass('done'), 'st-done');
+    assert.equal(statusDotClass(null), 'st-unknown');
+    assert.equal(statusDotClass('other'), 'st-unknown');
+    assert.equal(statusMeta('working').key, 'working');
+    assert.equal(statusMeta('blocked').key, 'blocked');
+  });
+
+  it('paneRowClass marks blocked pin and unread', () => {
+    assert.equal(paneRowClass({ agent_status: 'idle' }), 'row');
+    assert.equal(paneRowClass({ agent_status: 'working' }), 'row');
+    assert.equal(paneRowClass({ agent_status: 'blocked' }), 'row row-blocked');
+    assert.equal(
+      paneRowClass({ agent_status: 'done', unread: true }),
+      'row row-unread'
+    );
+    assert.equal(
+      paneRowClass({ agent_status: 'blocked', unread: true }),
+      'row row-blocked row-unread'
+    );
+    assert.equal(paneRowClass(null), 'row');
   });
 
   it('paneTitle falls back to agent+id', () => {

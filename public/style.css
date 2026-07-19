@@ -310,32 +310,6 @@ html.has-wallpaper .topbar {
   padding-top: 0.5rem;
 }
 
-/* —— in-app notification banner (M2.5) —— */
-.banner.notify {
-  padding: 0;
-  cursor: pointer;
-}
-.banner-notify-link {
-  display: block;
-  padding: 0.4rem 0.75rem;
-  /* Owns the top inset when it is the topmost visible banner. */
-  padding-top: max(0.4rem, env(safe-area-inset-top, 0px));
-  color: inherit;
-  text-decoration: none;
-}
-.banner.notify.done {
-  background: color-mix(in srgb, var(--ok) 18%, transparent);
-  color: var(--ok);
-}
-/* Any visible banner strips the inset from the view topbar. */
-#banner-notify:not(.hidden) ~ .view .topbar {
-  padding-top: 0.5rem;
-}
-/* herdr banner above is visible → it owns the inset, not the notify link. */
-#banner-herdr:not(.hidden) ~ #banner-notify .banner-notify-link {
-  padding-top: 0.4rem;
-}
-
 /* —— chat list rows —— */
 .list {
   flex: 1;
@@ -370,6 +344,23 @@ html.has-wallpaper .topbar {
 .row:active {
   background: var(--bg-elev);
 }
+/* blocked: red left-edge bar (WeChat @ style) — pin via sort */
+.row.row-blocked {
+  box-shadow: inset 3px 0 0 0 var(--red);
+  background: color-mix(in srgb, var(--red) 6%, var(--bg));
+}
+.row.row-blocked:active {
+  background: color-mix(in srgb, var(--red) 10%, var(--bg-elev));
+}
+
+.row-avatar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+  flex-shrink: 0;
+  width: 48px;
+}
 
 .avatar {
   position: relative;
@@ -385,17 +376,23 @@ html.has-wallpaper .topbar {
   letter-spacing: 0;
 }
 
+/* agent status dots on avatar — color is primary signal */
 .status-dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   flex-shrink: 0;
   box-shadow: 0 0 0 2px var(--bg);
 }
 .avatar .status-dot {
   position: absolute;
-  right: -2px;
-  bottom: -2px;
+  right: -3px;
+  bottom: -3px;
+}
+/* chat header dot stays slightly smaller */
+.chat-title-wrap .status-dot {
+  width: 10px;
+  height: 10px;
 }
 
 .st-working {
@@ -413,6 +410,41 @@ html.has-wallpaper .topbar {
 }
 .st-unknown {
   background: var(--unknown);
+}
+
+/* micro status under avatar — optional, never crowds summary */
+.row-status-label {
+  font-size: 9px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  color: var(--fg-muted);
+  max-width: 48px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+}
+.row-status-label.st-working {
+  color: var(--ok);
+  background: transparent;
+  animation: none;
+}
+.row-status-label.st-blocked {
+  color: var(--red);
+  background: transparent;
+}
+.row-status-label.st-done {
+  color: var(--blue);
+  background: transparent;
+}
+.row-status-label.st-idle {
+  color: var(--idle);
+  background: transparent;
+}
+.row-status-label.st-unknown {
+  color: var(--fg-muted);
+  background: transparent;
 }
 
 @keyframes breathe {
@@ -445,16 +477,6 @@ html.has-wallpaper .topbar {
   white-space: nowrap;
   margin-top: 0.2rem;
 }
-/* status hierarchy in list: textual badge ahead of the summary */
-.row-badge {
-  margin-right: 0.25rem;
-}
-.row-badge.blocked {
-  color: var(--danger);
-}
-.row-badge.working {
-  color: var(--ok);
-}
 .row-meta {
   display: flex;
   flex-direction: column;
@@ -467,6 +489,7 @@ html.has-wallpaper .topbar {
   color: var(--fg-muted);
   font-size: var(--fs-sm);
 }
+/* unread badge (done unread → blue status-dot + this red corner mark) */
 .unread-dot {
   width: 9px;
   height: 9px;
