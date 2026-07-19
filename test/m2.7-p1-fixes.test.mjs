@@ -44,6 +44,74 @@ function snapshotWithPane(paneId = 'w1:p1') {
   };
 }
 
+function emptySnapshot() {
+  return {
+    type: 'snapshot',
+    snapshot: {
+      panes: [],
+      workspaces: [],
+      tabs: [],
+    },
+  };
+}
+
+/**
+ * Shared mock client for H1 reconnect tests.
+ * @param {() => object} snapshotFn
+ */
+function makeH1Client(snapshotFn) {
+  /** @type {{ dead: boolean, close: () => void, _check?: unknown }[]} */
+  const handles = [];
+  let subscribeCalls = 0;
+
+  const client = {
+    // Hang events.wait on AbortSignal so the output loop does not busy-spin
+    // and starve the 1s dead-handle check interval.
+    rpc(method, _params, opts = {}) {
+      if (method === 'ping') return Promise.resolve({ type: 'pong', protocol: 16 });
+      if (method === 'session.snapshot') {
+        return Promise.resolve(snapshotFn());
+      }
+      if (method === 'pane.read') {
+        return Promise.resolve({ type: 'pane_read', read: { text: 'seed\n' } });
+      }
+      if (method === 'events.wait') {
+        return new Promise((_resolve, reject) => {
+          const onAbort = () => {
+            const err = new Error('aborted');
+            err.code = 'aborted';
+            reject(err);
+          };
+          if (opts.signal?.aborted) {
+            onAbort();
+            return;
+          }
+          opts.signal?.addEventListener('abort', onAbort, { once: true });
+          // Long hang (aborted on stop); do not tight-loop timeout.
+          setTimeout(() => {
+            const err = new Error('timeout');
+            err.code = 'timeout';
+            reject(err);
+          }, 60_000).unref?.();
+        });
+      }
+      return Promise.reject(new Error(`unexpected ${method}`));
+    },
+    subscribe: () => {
+      subscribeCalls += 1;
+      const h = { dead: false, close() {} };
+      handles.push(h);
+      return h;
+    },
+  };
+
+  return {
+    client,
+    handles,
+    getSubscribeCalls: () => subscribeCalls,
+  };
+}
+
 describe('H1: reconnect rebuilds events.subscribe for same pane set', () => {
   it(
     'dead subHandle + reconnect re-calls subscribe even when pane ids unchanged',
@@ -53,50 +121,9 @@ describe('H1: reconnect rebuilds events.subscribe for same pane set', () => {
       const stateDir = path.join(tmp, 'state');
       await fs.mkdir(stateDir);
 
-      /** @type {{ dead: boolean, close: () => void, _check?: unknown }[]} */
-      const handles = [];
-      let subscribeCalls = 0;
-
-      const client = {
-        // Hang events.wait on AbortSignal so the output loop does not busy-spin
-        // and starve the 1s dead-handle check interval.
-        rpc(method, _params, opts = {}) {
-          if (method === 'ping') return Promise.resolve({ type: 'pong', protocol: 16 });
-          if (method === 'session.snapshot') {
-            return Promise.resolve(snapshotWithPane('w1:p1'));
-          }
-          if (method === 'pane.read') {
-            return Promise.resolve({ type: 'pane_read', read: { text: 'seed\n' } });
-          }
-          if (method === 'events.wait') {
-            return new Promise((_resolve, reject) => {
-              const onAbort = () => {
-                const err = new Error('aborted');
-                err.code = 'aborted';
-                reject(err);
-              };
-              if (opts.signal?.aborted) {
-                onAbort();
-                return;
-              }
-              opts.signal?.addEventListener('abort', onAbort, { once: true });
-              // Long hang (aborted on stop); do not tight-loop timeout.
-              setTimeout(() => {
-                const err = new Error('timeout');
-                err.code = 'timeout';
-                reject(err);
-              }, 60_000).unref?.();
-            });
-          }
-          return Promise.reject(new Error(`unexpected ${method}`));
-        },
-        subscribe: () => {
-          subscribeCalls += 1;
-          const h = { dead: false, close() {} };
-          handles.push(h);
-          return h;
-        },
-      };
+      const { client, handles, getSubscribeCalls } = makeH1Client(() =>
+        snapshotWithPane('w1:p1')
+      );
 
       const mgr = createStateManager({
         client,
@@ -108,11 +135,11 @@ describe('H1: reconnect rebuilds events.subscribe for same pane set', () => {
       try {
         await mgr.start();
         // Wait until first subscription is established
-        for (let i = 0; i < 50 && subscribeCalls < 1; i++) {
+        for (let i = 0; i < 50 && getSubscribeCalls() < 1; i++) {
           await new Promise((r) => setTimeout(r, 20));
         }
-        assert.ok(subscribeCalls >= 1, 'initial subscribe expected');
-        const afterStart = subscribeCalls;
+        assert.ok(getSubscribeCalls() >= 1, 'initial subscribe expected');
+        const afterStart = getSubscribeCalls();
         assert.ok(handles.length >= 1, 'handle recorded');
 
         // Inject dead handle — same pane set will return on reconnect.
@@ -120,13 +147,64 @@ describe('H1: reconnect rebuilds events.subscribe for same pane set', () => {
 
         // Dead-check interval is 1s; reconnectMs is 50ms; allow headroom.
         const deadline = Date.now() + 5_000;
-        while (Date.now() < deadline && subscribeCalls <= afterStart) {
+        while (Date.now() < deadline && getSubscribeCalls() <= afterStart) {
           await new Promise((r) => setTimeout(r, 50));
         }
 
         assert.ok(
-          subscribeCalls > afterStart,
-          `expected re-subscribe after dead reconnect, got ${subscribeCalls} (was ${afterStart})`
+          getSubscribeCalls() > afterStart,
+          `expected re-subscribe after dead reconnect, got ${getSubscribeCalls()} (was ${afterStart})`
+        );
+      } finally {
+        await mgr.stop();
+        await fs.rm(tmp, { recursive: true, force: true });
+      }
+    }
+  );
+
+  it(
+    'H1 residual: dead handle + empty pane set still re-subscribes on reconnect',
+    { timeout: 10_000 },
+    async () => {
+      // Zero panes ⇒ subPaneKey is ''. Resetting needs-rebuild to '' made
+      // key===subPaneKey and skipped rebuildSubscription. Sentinel null fixes it.
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-h1-zero-'));
+      const stateDir = path.join(tmp, 'state');
+      await fs.mkdir(stateDir);
+
+      const { client, handles, getSubscribeCalls } = makeH1Client(() =>
+        emptySnapshot()
+      );
+
+      const mgr = createStateManager({
+        client,
+        stateDir,
+        allowedRoot: tmp,
+        reconnectMs: 50,
+      });
+      try {
+        await mgr.start();
+        for (let i = 0; i < 50 && getSubscribeCalls() < 1; i++) {
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        assert.ok(
+          getSubscribeCalls() >= 1,
+          'initial subscribe expected even with zero panes'
+        );
+        const afterStart = getSubscribeCalls();
+        assert.ok(handles.length >= 1, 'handle recorded');
+
+        // Dead handle while snapshot stays empty (pane key still '').
+        handles[handles.length - 1].dead = true;
+
+        const deadline = Date.now() + 5_000;
+        while (Date.now() < deadline && getSubscribeCalls() <= afterStart) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+
+        assert.ok(
+          getSubscribeCalls() > afterStart,
+          `expected re-subscribe after zero-pane dead reconnect, got ${getSubscribeCalls()} (was ${afterStart})`
         );
       } finally {
         await mgr.stop();
