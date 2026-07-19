@@ -7,7 +7,10 @@ import http from 'node:http';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { createStateManager } from './lib/state-manager.js';
+import {
+  createStateManager,
+  isSafeWallpaperName,
+} from './lib/state-manager.js';
 import { createClient, DEFAULT_SOCKET_PATH } from './lib/herdr-client.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -16,8 +19,10 @@ const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const STATE_DIR = path.join(ROOT, 'state');
 
-/** Max JSON body for POST /send (8 KiB). */
+/** Max JSON body for POST /send and /settings (8 KiB). */
 export const SEND_BODY_MAX_BYTES = 8 * 1024;
+
+const WALLPAPER_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -136,6 +141,117 @@ export function readBodyLimited(req, maxBytes) {
 }
 
 /**
+ * List wallpaper images under state/wallpapers (jpg/png/webp only).
+ * @param {string} stateDir
+ * @returns {Promise<Array<{ name: string, size: number }>>}
+ */
+export async function listWallpapers(stateDir) {
+  const dir = path.join(stateDir, 'wallpapers');
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  /** @type {Array<{ name: string, size: number }>} */
+  const out = [];
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;
+    const name = ent.name;
+    if (!isSafeWallpaperName(name)) continue;
+    const ext = path.extname(name).toLowerCase();
+    if (!WALLPAPER_EXTS.has(ext)) continue;
+    try {
+      const st = await fs.stat(path.join(dir, name));
+      if (!st.isFile()) continue;
+      out.push({ name, size: st.size });
+    } catch {
+      /* skip unreadable */
+    }
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+/**
+ * Resolve a wallpaper file under state/wallpapers with strict basename checks.
+ * Rejects traversal (`..`, encoded variants, separators).
+ *
+ * @param {string} stateDir
+ * @param {string} rawName path segment (may still be percent-encoded)
+ * @returns {Promise<
+ *   | { ok: true, file: string, ext: string }
+ *   | { ok: false, status: number }
+ * >}
+ */
+export async function resolveWallpaperFile(stateDir, rawName) {
+  if (rawName == null) return { ok: false, status: 400 };
+  const raw = String(rawName);
+  // Reject traversal tokens before and after decode.
+  if (
+    raw.includes('\0') ||
+    raw.includes('/') ||
+    raw.includes('\\') ||
+    raw.includes('..')
+  ) {
+    return { ok: false, status: 403 };
+  }
+  let name;
+  try {
+    name = decodeURIComponent(raw);
+  } catch {
+    return { ok: false, status: 403 };
+  }
+  if (
+    name.includes('\0') ||
+    name.includes('/') ||
+    name.includes('\\') ||
+    name.includes('..') ||
+    name !== path.basename(name)
+  ) {
+    return { ok: false, status: 403 };
+  }
+  if (!isSafeWallpaperName(name)) {
+    return { ok: false, status: 403 };
+  }
+  const wallpapersDir = path.join(stateDir, 'wallpapers');
+  let rootReal;
+  try {
+    rootReal = path.resolve(await fs.realpath(wallpapersDir));
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  const candidate = path.resolve(rootReal, name);
+  const prefix = rootReal.endsWith(path.sep) ? rootReal : rootReal + path.sep;
+  if (candidate !== rootReal && !candidate.startsWith(prefix)) {
+    return { ok: false, status: 403 };
+  }
+  if (path.basename(candidate) !== name) {
+    return { ok: false, status: 403 };
+  }
+  let realFile;
+  try {
+    realFile = path.resolve(await fs.realpath(candidate));
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  if (realFile !== rootReal && !realFile.startsWith(prefix)) {
+    return { ok: false, status: 403 };
+  }
+  try {
+    const st = await fs.stat(realFile);
+    if (!st.isFile()) return { ok: false, status: 404 };
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  return {
+    ok: true,
+    file: realFile,
+    ext: path.extname(realFile).toLowerCase(),
+  };
+}
+
+/**
  * Resolve a static path under public/, rejecting traversal and symlink escape.
  * @param {string} urlPath pathname starting with /herd
  * @param {string} [publicDir]
@@ -245,6 +361,19 @@ export async function startServer(options = {}) {
     if (method !== 'GET' && method !== 'POST' && method !== 'HEAD') {
       res.setHeader('Allow', 'GET, HEAD, POST');
       sendText(res, 405, 'method not allowed');
+      return;
+    }
+
+    // Reject traversal tokens in the raw request path before route matching
+    // (URL parser collapses /wallpaper/../… into another route). Also reject
+    // percent-encoded dot segments (%2e) so encodings never reach static serve.
+    if (
+      rawPath.includes('\0') ||
+      rawPath.includes('\\') ||
+      rawPath.includes('..') ||
+      /%2e/i.test(rawPath)
+    ) {
+      sendText(res, 403, 'forbidden');
       return;
     }
 
@@ -363,6 +492,90 @@ export async function startServer(options = {}) {
       } catch (err) {
         sendJson(res, 500, { error: err?.message || 'seen failed' });
       }
+      return;
+    }
+
+    // --- wallpapers + settings (M2) ---
+    if (pathname === '/herd/api/wallpapers' && (method === 'GET' || method === 'HEAD')) {
+      try {
+        const wallpapers = await listWallpapers(stateDir);
+        sendJson(res, 200, { wallpapers });
+      } catch (err) {
+        sendJson(res, 500, { error: err?.message || 'wallpapers failed' });
+      }
+      return;
+    }
+
+    const wallpaperMatch = pathname.match(/^\/herd\/api\/wallpaper\/([^/]+)$/);
+    if (wallpaperMatch && (method === 'GET' || method === 'HEAD')) {
+      // Prefer raw path segment so encoded `..` is visible before URL parser
+      // collapses it; fall back to pathname capture.
+      let rawSeg = wallpaperMatch[1];
+      const rawApi = rawPath.match(/^\/herd\/api\/wallpaper\/([^/?#]+)/);
+      if (rawApi) rawSeg = rawApi[1];
+      // Also reject if the raw request path itself contains traversal.
+      if (rawPath.includes('..') || rawPath.includes('\\') || rawPath.includes('\0')) {
+        sendText(res, 403, 'forbidden');
+        return;
+      }
+      const resolved = await resolveWallpaperFile(stateDir, rawSeg);
+      if (!resolved.ok) {
+        sendText(
+          res,
+          resolved.status,
+          resolved.status === 403 ? 'forbidden' : 'not found'
+        );
+        return;
+      }
+      try {
+        const data = await fs.readFile(resolved.file);
+        const type = MIME[resolved.ext] || 'application/octet-stream';
+        res.writeHead(200, {
+          'Content-Type': type,
+          'Content-Length': data.length,
+          'Cache-Control': 'public, max-age=86400',
+        });
+        if (method === 'HEAD') res.end();
+        else res.end(data);
+      } catch {
+        sendText(res, 404, 'not found');
+      }
+      return;
+    }
+
+    if (pathname === '/herd/api/settings' && (method === 'GET' || method === 'HEAD')) {
+      sendJson(res, 200, manager.getSettings());
+      return;
+    }
+
+    if (pathname === '/herd/api/settings' && method === 'POST') {
+      if (!isSameOriginWrite(req)) {
+        sendJson(res, 403, { error: 'cross_origin' });
+        return;
+      }
+      const body = await readBodyLimited(req, SEND_BODY_MAX_BYTES);
+      if (!body.ok) {
+        sendJson(res, body.status, { error: body.error });
+        return;
+      }
+      let payload;
+      try {
+        payload = body.raw ? JSON.parse(body.raw) : {};
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json' });
+        return;
+      }
+      const result = await manager.updateSettings(payload, {
+        wallpaperExists: async (name) => {
+          const r = await resolveWallpaperFile(stateDir, name);
+          return r.ok;
+        },
+      });
+      if (!result.ok) {
+        sendJson(res, result.status, { error: result.error });
+        return;
+      }
+      sendJson(res, 200, result.settings);
       return;
     }
 

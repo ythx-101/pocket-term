@@ -17,12 +17,16 @@ import {
   hotkeyPayload,
   shouldConfirmBeforeSend,
   sendErrorToast,
+  dimPercentToCssVar,
+  dimToPercent,
+  dimPercentToApi,
+  wallpaperAssetUrl,
+  DIM_SLIDER_MAX,
 } from './spa-utils.js';
 
 const APP_VERSION = '0.0.1';
 const LS_THEME = 'pt2-theme';
 const LS_FONT = 'pt2-font';
-const LS_DIM = 'pt2-dim';
 const LS_CONFIRM_SEND = 'pt2-confirm-send';
 const LS_LOCAL_READONLY = 'pt2-local-readonly';
 
@@ -83,6 +87,13 @@ let bootFailed = false; // first state fetch failed → offline empty-state
 let sending = false;
 /** @type {HTMLElement|null} */
 let toastHost = null;
+/** @type {{ wallpaper: string|null, dim: number }} */
+let userSettings = { wallpaper: null, dim: 0.35 };
+/** @type {Array<{ name: string, size: number }>} */
+let wallpaperCatalog = [];
+/** @type {ReturnType<typeof setTimeout>|null} */
+let dimSaveTimer = null;
+let wallpaperPanelOpen = false;
 
 // —— settings ——
 function getLocalPrefs() {
@@ -92,19 +103,63 @@ function getLocalPrefs() {
   };
 }
 
+/**
+ * Apply wallpaper + dim to #wallpaper / #dim / html class (live preview).
+ * @param {{ wallpaper?: string|null, dim?: number }} s
+ */
+function applyWallpaperVisual(s) {
+  const wallpaper = s.wallpaper === undefined ? userSettings.wallpaper : s.wallpaper;
+  const dim = s.dim === undefined ? userSettings.dim : s.dim;
+  const percent = dimToPercent(dim);
+  document.documentElement.style.setProperty(
+    '--wallpaper-dim',
+    dimPercentToCssVar(percent)
+  );
+  const slider = /** @type {HTMLInputElement|null} */ ($('#dim-slider'));
+  if (slider) {
+    slider.max = String(DIM_SLIDER_MAX);
+    slider.value = String(percent);
+    slider.disabled = false;
+  }
+  const dimVal = $('#dim-value');
+  if (dimVal) dimVal.textContent = `${percent}%`;
+
+  const layer = /** @type {HTMLElement|null} */ ($('#wallpaper'));
+  const has = typeof wallpaper === 'string' && wallpaper.length > 0;
+  document.documentElement.classList.toggle('has-wallpaper', has);
+  if (layer) {
+    if (has) {
+      const url = wallpaperAssetUrl(BASE, wallpaper);
+      layer.style.backgroundImage = `url("${url}")`;
+    } else {
+      layer.style.backgroundImage = 'none';
+    }
+  }
+
+  // Card summary on 我 page
+  const sub = $('#wallpaper-card-sub');
+  if (sub) {
+    sub.textContent = has ? wallpaper : '无壁纸 · 主题底色';
+  }
+  const thumb = /** @type {HTMLElement|null} */ ($('#wallpaper-card-thumb'));
+  if (thumb) {
+    if (has) {
+      thumb.style.backgroundImage = `url("${wallpaperAssetUrl(BASE, wallpaper)}")`;
+      thumb.classList.add('has-image');
+    } else {
+      thumb.style.backgroundImage = '';
+      thumb.classList.remove('has-image');
+    }
+  }
+}
+
 function loadSettings() {
   const theme = localStorage.getItem(LS_THEME) || 'dark';
   const font = localStorage.getItem(LS_FONT) || 'md';
-  const dim = localStorage.getItem(LS_DIM) || '35';
   const prefs = getLocalPrefs();
   document.documentElement.setAttribute('data-theme', theme);
   document.documentElement.setAttribute('data-font', font);
-  document.documentElement.style.setProperty(
-    '--wallpaper-dim',
-    String(Number(dim) / 100)
-  );
-  const slider = $('#dim-slider');
-  if (slider) slider.value = dim;
+  applyWallpaperVisual(userSettings);
   $$('.seg-btn[data-theme-set]').forEach((b) => {
     b.classList.toggle('active', b.dataset.themeSet === theme);
   });
@@ -137,6 +192,182 @@ function setTheme(theme) {
 function setFont(font) {
   localStorage.setItem(LS_FONT, font);
   loadSettings();
+}
+
+/**
+ * Pull settings from bridge state payload.
+ * @param {object|null|undefined} next
+ */
+function ingestServerSettings(next) {
+  const s = next?.settings;
+  if (!s || typeof s !== 'object') return;
+  if ('wallpaper' in s) {
+    userSettings.wallpaper =
+      s.wallpaper === null || s.wallpaper === ''
+        ? null
+        : String(s.wallpaper);
+  }
+  if (typeof s.dim === 'number' && Number.isFinite(s.dim)) {
+    userSettings.dim = s.dim;
+  }
+  applyWallpaperVisual(userSettings);
+  if (wallpaperPanelOpen) renderWallpaperPanel();
+}
+
+async function fetchWallpapers() {
+  const res = await fetch(`${BASE}/api/wallpapers`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`wallpapers ${res.status}`);
+  const body = await res.json();
+  const list = Array.isArray(body?.wallpapers)
+    ? body.wallpapers
+    : Array.isArray(body)
+      ? body
+      : [];
+  wallpaperCatalog = list
+    .filter((x) => x && typeof x.name === 'string')
+    .map((x) => ({ name: x.name, size: Number(x.size) || 0 }));
+  return wallpaperCatalog;
+}
+
+/**
+ * POST settings patch; updates local userSettings on success.
+ * @param {{ wallpaper?: string|null, dim?: number }} patch
+ */
+async function postSettings(patch) {
+  const res = await fetch(`${BASE}/api/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  if (!res.ok) {
+    throw new Error(body?.error || `settings ${res.status}`);
+  }
+  if (body && typeof body === 'object') {
+    if ('wallpaper' in body) {
+      userSettings.wallpaper =
+        body.wallpaper === null || body.wallpaper === ''
+          ? null
+          : String(body.wallpaper);
+    }
+    if (typeof body.dim === 'number') userSettings.dim = body.dim;
+  } else {
+    Object.assign(userSettings, patch);
+  }
+  applyWallpaperVisual(userSettings);
+  return body;
+}
+
+function renderWallpaperPanel() {
+  const panel = $('#wallpaper-panel');
+  if (!panel) return;
+  panel.replaceChildren();
+
+  const noneBtn = el(
+    'button',
+    {
+      type: 'button',
+      className: `wallpaper-option${userSettings.wallpaper == null ? ' selected' : ''}`,
+      role: 'option',
+      'aria-selected': userSettings.wallpaper == null ? 'true' : 'false',
+      onClick: () => selectWallpaper(null),
+    },
+    [
+      el('span', { className: 'wallpaper-option-thumb none', text: '∅' }),
+      el('span', { className: 'wallpaper-option-label', text: '无壁纸' }),
+    ]
+  );
+  panel.append(noneBtn);
+
+  if (!wallpaperCatalog.length) {
+    panel.append(
+      el('div', {
+        className: 'wallpaper-empty',
+        text: '暂无可用壁纸',
+      })
+    );
+    return;
+  }
+
+  for (const item of wallpaperCatalog) {
+    const selected = userSettings.wallpaper === item.name;
+    const thumb = el('span', {
+      className: 'wallpaper-option-thumb',
+      style: `background-image:url("${wallpaperAssetUrl(BASE, item.name)}")`,
+    });
+    const btn = el(
+      'button',
+      {
+        type: 'button',
+        className: `wallpaper-option${selected ? ' selected' : ''}`,
+        role: 'option',
+        'aria-selected': selected ? 'true' : 'false',
+        title: item.name,
+        onClick: () => selectWallpaper(item.name),
+      },
+      [
+        thumb,
+        el('span', { className: 'wallpaper-option-label', text: item.name }),
+      ]
+    );
+    panel.append(btn);
+  }
+}
+
+/**
+ * @param {string|null} name
+ */
+async function selectWallpaper(name) {
+  // Optimistic visual
+  applyWallpaperVisual({ wallpaper: name });
+  userSettings.wallpaper = name;
+  renderWallpaperPanel();
+  try {
+    await postSettings({ wallpaper: name });
+  } catch {
+    showToast('壁纸保存失败', 'err');
+  }
+}
+
+async function toggleWallpaperPanel() {
+  const panel = $('#wallpaper-panel');
+  const btn = $('#btn-wallpaper');
+  if (!panel) return;
+  wallpaperPanelOpen = !wallpaperPanelOpen;
+  panel.classList.toggle('hidden', !wallpaperPanelOpen);
+  btn?.setAttribute('aria-expanded', wallpaperPanelOpen ? 'true' : 'false');
+  if (wallpaperPanelOpen) {
+    try {
+      await fetchWallpapers();
+    } catch {
+      showToast('无法加载壁纸列表', 'warn');
+    }
+    renderWallpaperPanel();
+  }
+}
+
+/**
+ * Live dim preview + debounced persist.
+ * @param {number} percent
+ */
+function onDimSliderInput(percent) {
+  const css = dimPercentToCssVar(percent);
+  document.documentElement.style.setProperty('--wallpaper-dim', css);
+  const dimVal = $('#dim-value');
+  if (dimVal) dimVal.textContent = `${Math.round(Number(percent) || 0)}%`;
+  userSettings.dim = dimPercentToApi(percent);
+  if (dimSaveTimer) clearTimeout(dimSaveTimer);
+  dimSaveTimer = setTimeout(() => {
+    dimSaveTimer = null;
+    postSettings({ dim: userSettings.dim }).catch(() => {
+      showToast('暗化设置保存失败', 'err');
+    });
+  }, 280);
 }
 
 function updateHerdrAbout() {
@@ -716,6 +947,7 @@ function applyState(next) {
   } else {
     banner?.classList.add('hidden');
   }
+  ingestServerSettings(next);
   updateHerdrAbout();
   updateComposerVisibility();
   if (activePaneId) {
@@ -886,9 +1118,14 @@ function wire() {
     updateComposerVisibility();
   });
 
-  // Wallpaper placeholder (M2)
+  // Wallpaper picker + dim (M2)
   $('#btn-wallpaper')?.addEventListener('click', () => {
-    showToast('壁纸功能 M2 上线，图片由主人提供', 'info');
+    toggleWallpaperPanel();
+  });
+  const dimSlider = /** @type {HTMLInputElement|null} */ ($('#dim-slider'));
+  dimSlider?.addEventListener('input', (ev) => {
+    const v = /** @type {HTMLInputElement} */ (ev.target).value;
+    onDimSliderInput(v);
   });
 
   // Composer: tap send (do not hijack Enter — mobile IME safe)

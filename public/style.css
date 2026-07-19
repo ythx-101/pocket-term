@@ -116,10 +116,11 @@ body {
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background-color: var(--bg-chat);
-  background-image: none; /* M2: url(...) */
+  background-color: var(--bg);
+  background-image: none;
   background-size: cover;
   background-position: center;
+  background-repeat: no-repeat;
 }
 
 #dim {
@@ -128,7 +129,53 @@ body {
   z-index: 1;
   pointer-events: none;
   background: rgba(0, 0, 0, var(--wallpaper-dim, 0.35));
-  opacity: 0; /* only visible once wallpaper image is set (M2) */
+  opacity: 0; /* only visible once wallpaper image is set */
+}
+
+/* Wallpaper active: show image + dim on all views (list + chat) */
+html.has-wallpaper #dim {
+  opacity: 1;
+}
+html.has-wallpaper #wallpaper {
+  background-color: var(--bg-chat);
+}
+/* Let wallpaper show through list/settings surfaces */
+html.has-wallpaper .list,
+html.has-wallpaper .settings {
+  background: transparent;
+}
+html.has-wallpaper .row {
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+}
+html.has-wallpaper .row:active {
+  background: color-mix(in srgb, var(--bg-elev) 85%, transparent);
+}
+html.has-wallpaper .group-head {
+  background: color-mix(in srgb, var(--bg-elev) 78%, transparent);
+}
+html.has-wallpaper .settings-group {
+  background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
+  backdrop-filter: blur(8px);
+}
+/* Bubble readability on bright wallpapers */
+html.has-wallpaper .bubble.agent,
+html.has-wallpaper .bubble.stream {
+  background: color-mix(in srgb, var(--bubble-agent) 88%, #000 12%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 1px 3px var(--shadow), 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
+}
+html.has-wallpaper .bubble.user {
+  box-shadow: 0 1px 3px var(--shadow);
+}
+html.has-wallpaper .time-chip {
+  background: color-mix(in srgb, var(--bg-elev) 70%, transparent);
+  backdrop-filter: blur(6px);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+}
+html.has-wallpaper .topbar {
+  background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
 }
 
 .view {
@@ -757,10 +804,12 @@ body.chat-open .toast-host {
       color-mix(in srgb, var(--accent) 35%, var(--bg-elev)),
       color-mix(in srgb, var(--blue) 30%, var(--bg))
     );
+  background-size: cover;
+  background-position: center;
   border: 1px dashed var(--border);
   position: relative;
 }
-.wallpaper-thumb::after {
+.wallpaper-thumb:not(.has-image)::after {
   content: '🖼';
   position: absolute;
   inset: 0;
@@ -768,6 +817,9 @@ body.chat-open .toast-host {
   place-items: center;
   font-size: 1.1rem;
   opacity: 0.7;
+}
+.wallpaper-thumb.has-image {
+  border-style: solid;
 }
 .wallpaper-card-main {
   flex: 1;
@@ -782,23 +834,98 @@ body.chat-open .toast-host {
 .wallpaper-card-sub {
   color: var(--fg-muted);
   font-size: var(--fs-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .wallpaper-card-chevron {
   color: var(--fg-muted);
   font-size: 1.25rem;
   line-height: 1;
 }
+.wallpaper-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.55rem;
+  margin-top: 0.65rem;
+  padding-top: 0.15rem;
+}
+.wallpaper-panel.hidden {
+  display: none !important;
+}
+.wallpaper-option {
+  appearance: none;
+  border: 2px solid var(--border);
+  background: var(--bg);
+  color: var(--fg);
+  border-radius: 12px;
+  padding: 0.4rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+  cursor: pointer;
+  font: inherit;
+  min-height: 44px;
+}
+.wallpaper-option.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent);
+}
+.wallpaper-option:active {
+  opacity: 0.85;
+}
+.wallpaper-option-thumb {
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: 8px;
+  background: var(--bg-elev);
+  background-size: cover;
+  background-position: center;
+  display: grid;
+  place-items: center;
+  color: var(--fg-muted);
+  font-size: 1.25rem;
+}
+.wallpaper-option-thumb.none {
+  background: linear-gradient(
+    135deg,
+    var(--bg-elev),
+    color-mix(in srgb, var(--border) 40%, var(--bg))
+  );
+}
+.wallpaper-option-label {
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wallpaper-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  padding: 0.5rem;
+}
 .dim-row {
   display: flex;
   align-items: center;
   gap: 0.75rem;
   margin-top: 0.65rem;
-  opacity: 0.55;
   font-size: var(--fs-sm);
   color: var(--fg-muted);
 }
 .dim-row input[type='range'] {
   flex: 1;
+  accent-color: var(--accent);
+}
+.dim-value {
+  min-width: 2.5rem;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
 }
 .toggle-row {
   display: flex;
@@ -899,11 +1026,7 @@ body.chat-open .toast-host {
 body.chat-open #tab-bar {
   display: none !important;
 }
-body.chat-open #wallpaper,
-body.chat-open #dim {
-  /* chat uses wallpaper layer; dim ready for M2 */
-  opacity: 1;
-}
-body.chat-open #dim {
-  opacity: 0; /* no wallpaper image yet */
+/* Chat page: wallpaper layer uses chat-tinted base when no image */
+body.chat-open #wallpaper {
+  background-color: var(--bg-chat);
 }

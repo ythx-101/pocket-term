@@ -144,26 +144,33 @@
               type="button"
               id="btn-wallpaper"
               class="wallpaper-card"
-              aria-label="选择壁纸（M2 上线）"
+              aria-expanded="false"
+              aria-controls="wallpaper-panel"
+              aria-label="选择壁纸"
             >
-              <span class="wallpaper-thumb" aria-hidden="true"></span>
+              <span id="wallpaper-card-thumb" class="wallpaper-thumb" aria-hidden="true"></span>
               <span class="wallpaper-card-main">
                 <span class="wallpaper-card-title">选择壁纸</span>
-                <span class="wallpaper-card-sub">M2 上线 · 图片由主人提供</span>
+                <span id="wallpaper-card-sub" class="wallpaper-card-sub"
+                  >无壁纸 · 主题底色</span
+                >
               </span>
               <span class="wallpaper-card-chevron" aria-hidden="true">›</span>
             </button>
-            <label class="dim-row dim-row-soon">
+            <div id="wallpaper-panel" class="wallpaper-panel hidden" role="listbox" aria-label="可用壁纸">
+              <!-- filled by app.js -->
+            </div>
+            <label class="dim-row" id="dim-row">
               <span>暗化</span>
               <input
                 id="dim-slider"
                 type="range"
                 min="0"
-                max="80"
+                max="90"
                 value="35"
-                disabled
-                aria-label="壁纸暗化（即将上线）"
+                aria-label="壁纸暗化"
               />
+              <span id="dim-value" class="dim-value">35%</span>
             </label>
           </div>
           <div class="settings-group">

@@ -362,3 +362,53 @@ export function sendErrorToast(status, body) {
   }
   return err ? `发送失败：${err}` : `发送失败（${status || '?'}）`;
 }
+
+/** Dim slider range: 0–90% → CSS var 0–0.9 */
+export const DIM_SLIDER_MAX = 90;
+export const DIM_DEFAULT_PERCENT = 35;
+
+/**
+ * Map dim slider percent (0..90) to CSS `--wallpaper-dim` fraction string.
+ * @param {number|string|null|undefined} percent
+ * @returns {string} e.g. "0.35"
+ */
+export function dimPercentToCssVar(percent) {
+  let n = Number(percent);
+  if (!Number.isFinite(n)) n = DIM_DEFAULT_PERCENT;
+  n = Math.min(DIM_SLIDER_MAX, Math.max(0, n));
+  // Keep one or two decimals max; 35 → "0.35", 0 → "0", 90 → "0.9"
+  const frac = Math.round(n) / 100;
+  return String(frac);
+}
+
+/**
+ * Map API dim fraction (0..0.9) to slider percent (0..90).
+ * @param {number|string|null|undefined} dim
+ * @returns {number}
+ */
+export function dimToPercent(dim) {
+  let n = Number(dim);
+  if (!Number.isFinite(n)) return DIM_DEFAULT_PERCENT;
+  n = Math.min(0.9, Math.max(0, n));
+  return Math.round(n * 100);
+}
+
+/**
+ * Map slider percent to API dim fraction (0..0.9).
+ * @param {number|string|null|undefined} percent
+ * @returns {number}
+ */
+export function dimPercentToApi(percent) {
+  return Number(dimPercentToCssVar(percent));
+}
+
+/**
+ * URL for a wallpaper asset under the API base.
+ * @param {string} base e.g. "/herd"
+ * @param {string} name basename
+ * @returns {string}
+ */
+export function wallpaperAssetUrl(base, name) {
+  const b = String(base || '').replace(/\/$/, '');
+  return `${b}/api/wallpaper/${encodeURIComponent(name)}`;
+}
