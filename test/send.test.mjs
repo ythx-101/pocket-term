@@ -3,7 +3,7 @@
  * Hard rule: only send to a scratch pane this file creates and closes.
  * Never target other agents' panes.
  */
-import { describe, it, before, after } from 'node:test';
+import { describe, it, before, after, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +15,7 @@ import {
   createStateManager,
   isDuplicateUserMessage,
   USER_BUBBLE_DEDUPE_MS,
+  RUN_ENTER_DELAY_MS,
 } from '../lib/state-manager.js';
 import { createClient, DEFAULT_SOCKET_PATH } from '../lib/herdr-client.js';
 
@@ -161,6 +162,138 @@ describe('isDuplicateUserMessage (Tier A optimistic dedupe)', () => {
     } finally {
       await mgr.stop();
       await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('sendToPane mode run two-step (paste-detection fix)', () => {
+  /** CJK fixture — single-write pane.run was swallowed by Claude Code paste detection. */
+  const CJK_TEXT = '你好，请用中文回答这个问题。';
+
+  /**
+   * @param {{ rpc?: Function }} [overrides]
+   */
+  async function makeManager(overrides = {}) {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-twostep-'));
+    /** @type {Array<{ method: string, params: object }>} */
+    const calls = [];
+    const client = {
+      allowWrite: true,
+      rpc: async (method, params = {}) => {
+        if (overrides.rpc) {
+          return overrides.rpc(method, params, calls);
+        }
+        if (method === 'pane.send_text' || method === 'pane.run') {
+          calls.push({ method, params: { ...params } });
+          return { type: 'ok' };
+        }
+        throw new Error(`unexpected ${method}`);
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const mgr = createStateManager({
+      client,
+      stateDir,
+      runEnterDelayMs: RUN_ENTER_DELAY_MS,
+    });
+    mgr._internal.setSnapshot({
+      workspaces: [],
+      tabs: [],
+      panes: [{ pane_id: 'w0:pTwo', agent_status: 'unknown' }],
+      agents: [],
+    });
+    return { mgr, calls, stateDir };
+  }
+
+  it('non-empty run: send_text → delay → empty pane.run (CJK fixture, fake timer)', async () => {
+    mock.timers.enable({ apis: ['setTimeout'], now: 0 });
+    const { mgr, calls, stateDir } = await makeManager();
+    try {
+      const sendPromise = mgr.sendToPane('w0:pTwo', CJK_TEXT, 'run');
+
+      // Allow send_text rpc microtask to settle; delay should still be pending.
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.equal(calls.length, 1, 'only send_text before delay elapses');
+      assert.equal(calls[0].method, 'pane.send_text');
+      assert.equal(calls[0].params.pane_id, 'w0:pTwo');
+      assert.equal(calls[0].params.text, CJK_TEXT);
+
+      mock.timers.tick(RUN_ENTER_DELAY_MS - 1);
+      await Promise.resolve();
+      assert.equal(calls.length, 1, 'still waiting for full delay');
+
+      mock.timers.tick(1);
+      const result = await sendPromise;
+      assert.equal(result.ok, true);
+      assert.equal(result.sent, true);
+
+      assert.equal(calls.length, 2);
+      assert.equal(calls[1].method, 'pane.run');
+      assert.equal(calls[1].params.pane_id, 'w0:pTwo');
+      assert.equal(calls[1].params.text, '', 'bare Enter only');
+    } finally {
+      mock.timers.reset();
+      await mgr.stop();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('empty run stays single pure-Enter pane.run (confirm button path)', async () => {
+    const { mgr, calls, stateDir } = await makeManager();
+    try {
+      const result = await mgr.sendToPane('w0:pTwo', '', 'run');
+      assert.equal(result.ok, true);
+      assert.deepEqual(calls, [
+        { method: 'pane.run', params: { pane_id: 'w0:pTwo', text: '' } },
+      ]);
+    } finally {
+      await mgr.stop();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('mode text is a single send_text (no Enter)', async () => {
+    const { mgr, calls, stateDir } = await makeManager();
+    try {
+      const result = await mgr.sendToPane('w0:pTwo', CJK_TEXT, 'text');
+      assert.equal(result.ok, true);
+      assert.deepEqual(calls, [
+        {
+          method: 'pane.send_text',
+          params: { pane_id: 'w0:pTwo', text: CJK_TEXT },
+        },
+      ]);
+    } finally {
+      await mgr.stop();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rate-limit reservation spans the whole two-step send', async () => {
+    mock.timers.enable({ apis: ['setTimeout'], now: 0 });
+    const { mgr, calls, stateDir } = await makeManager();
+    try {
+      const first = mgr.sendToPane('w0:pTwo', CJK_TEXT, 'run');
+      await Promise.resolve();
+      await Promise.resolve();
+      assert.equal(calls.length, 1);
+
+      // Mid-delay: second send must be rate-limited (reservation still held).
+      const mid = await mgr.sendToPane('w0:pTwo', 'other', 'run');
+      assert.equal(mid.ok, false);
+      assert.equal(mid.status, 429);
+      assert.equal(mid.error, 'rate_limited');
+      assert.equal(calls.length, 1, 'loser must not reach herdr');
+
+      mock.timers.tick(RUN_ENTER_DELAY_MS);
+      const done = await first;
+      assert.equal(done.ok, true);
+      assert.equal(calls.length, 2);
+    } finally {
+      mock.timers.reset();
+      await mgr.stop();
+      await fs.rm(stateDir, { recursive: true, force: true });
     }
   });
 });
@@ -389,8 +522,8 @@ describe('atomic rate-limit reservation (concurrent sends)', () => {
       );
       const limited = a.res.status === 429 ? a : b;
       assert.equal(limited.json.error, 'rate_limited');
-      // Only the winner should have reached herdr (reservation blocks the loser).
-      assert.equal(sendCalls, 1, `herdr send calls should be 1, got ${sendCalls}`);
+      // Winner does two-step run (send_text + bare Enter); loser is blocked.
+      assert.equal(sendCalls, 2, `herdr send calls should be 2, got ${sendCalls}`);
     } finally {
       await srv.close();
       await fs.rm(stateDir, { recursive: true, force: true });
