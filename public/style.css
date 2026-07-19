@@ -4,14 +4,15 @@
 [data-theme='dark'] {
   --bg: #1a1824;
   --bg-elev: #232136;
-  --bg-chat: #1a1824;
+  --bg-chat: #14121d;
   --fg: #e0def4;
   --fg-muted: #908caa;
   --border: #393552;
+  --divider: #2a2740;
   --accent: #c4a7e7;
-  --bubble-agent: #2a273f;
-  --bubble-user: #3e8acc;
-  --bubble-user-fg: #ffffff;
+  --bubble-agent: #2e2b45;
+  --bubble-user: #3eb575;
+  --bubble-user-fg: #06130b;
   --tool-fg: #6e6a86;
   --danger: #eb6f92;
   --warn: #f6c177;
@@ -31,14 +32,15 @@
 [data-theme='light'] {
   --bg: #faf4ed;
   --bg-elev: #fffaf3;
-  --bg-chat: #f2e9e1;
+  --bg-chat: #ede4da;
   --fg: #575279;
   --fg-muted: #9893a5;
   --border: #dfdad9;
+  --divider: #eae4e2;
   --accent: #907aa9;
   --bubble-agent: #ffffff;
-  --bubble-user: #56949f;
-  --bubble-user-fg: #ffffff;
+  --bubble-user: #95ec69;
+  --bubble-user-fg: #10240c;
   --tool-fg: #9893a5;
   --danger: #b4637a;
   --warn: #ea9d34;
@@ -105,8 +107,8 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding-bottom: env(safe-area-inset-bottom, 0);
-  padding-top: env(safe-area-inset-top, 0);
+  /* Safe-area ownership: top → .topbar, bottom → .tab-bar / .readonly-bar.
+     No padding here, or insets get applied twice. */
 }
 
 #wallpaper {
@@ -249,6 +251,8 @@ body {
   color: var(--warn);
   text-align: center;
   padding: 0.4rem 0.75rem;
+  /* Banner sits above the topbar when visible, so it owns the top inset. */
+  padding-top: max(0.4rem, env(safe-area-inset-top, 0px));
   font-size: var(--fs-sm);
   border-bottom: 1px solid var(--border);
 }
@@ -264,13 +268,25 @@ body {
   display: flex;
   align-items: center;
   gap: 0.75rem;
-  padding: 0.7rem 0.9rem;
-  min-height: 64px;
-  border-bottom: 1px solid var(--border);
+  padding: 0.65rem 0.9rem;
+  min-height: 66px;
+  position: relative;
   cursor: pointer;
   text-decoration: none;
   color: inherit;
   background: var(--bg);
+}
+/* WeChat-style inset divider: starts after the avatar */
+.row::after {
+  content: '';
+  position: absolute;
+  left: calc(0.9rem + 48px + 0.75rem);
+  right: 0;
+  bottom: 0;
+  border-bottom: 1px solid var(--divider);
+}
+.row:last-child::after {
+  border-bottom: none;
 }
 .row:active {
   background: var(--bg-elev);
@@ -348,7 +364,17 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  margin-top: 0.15rem;
+  margin-top: 0.2rem;
+}
+/* status hierarchy in list: textual badge ahead of the summary */
+.row-badge {
+  margin-right: 0.25rem;
+}
+.row-badge.blocked {
+  color: var(--danger);
+}
+.row-badge.working {
+  color: var(--ok);
 }
 .row-meta {
   display: flex;
@@ -375,7 +401,7 @@ body {
   font-size: var(--fs-sm);
   color: var(--fg-muted);
   background: var(--bg-elev);
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--divider);
   font-weight: 600;
 }
 .group-sub {
@@ -410,8 +436,17 @@ body {
 .bubble-list {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.65rem;
   padding-bottom: 0.5rem;
+}
+
+/* WeChat-style centered time chip between distant bubbles */
+.time-chip {
+  align-self: center;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  padding: 0.1rem 0.5rem;
+  opacity: 0.85;
 }
 
 .load-earlier {
@@ -434,9 +469,9 @@ body {
 }
 
 .bubble {
-  max-width: 82%;
-  padding: 0.55rem 0.75rem;
-  border-radius: 12px;
+  max-width: 78%;
+  padding: 0.6rem 0.8rem;
+  border-radius: 10px;
   font-size: var(--fs);
   line-height: 1.5;
   box-shadow: 0 1px 2px var(--shadow);
@@ -459,6 +494,7 @@ body {
   color: var(--fg);
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: var(--fs-sm);
+  line-height: 1.45;
   max-width: 94%;
   width: 94%;
   border-radius: 8px;
@@ -596,10 +632,30 @@ body {
 }
 
 .empty {
-  padding: 2rem 1rem;
+  padding: 2.5rem 1rem;
   text-align: center;
   color: var(--fg-muted);
   font-size: var(--fs-sm);
+}
+.empty.loading::before {
+  content: '';
+  display: block;
+  width: 22px;
+  height: 22px;
+  margin: 0 auto 0.6rem;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  animation: spin 0.9s linear infinite;
+}
+.empty.offline {
+  color: var(--danger);
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 /* chat view hides tab bar via body class */

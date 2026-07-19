@@ -8,6 +8,9 @@ import {
   foldBubbles,
   stripAnsi,
   compressBlankLines,
+  isDecorativeLine,
+  stripFrameBorders,
+  cleanStreamLines,
 } from '../lib/bubbles.js';
 
 describe('stripAnsi + compressBlankLines', () => {
@@ -62,6 +65,95 @@ describe('diffNewText', () => {
 
   it('identical text → empty', () => {
     assert.deepEqual(diffNewText('same\n', 'same\n'), []);
+  });
+});
+
+describe('frame / decorative-line cleaning (Tier B display)', () => {
+  it('isDecorativeLine: pure box-drawing lines only', () => {
+    assert.equal(isDecorativeLine('────────────'), true);
+    assert.equal(isDecorativeLine('╭──────────╮'), true);
+    assert.equal(isDecorativeLine('╰──────────╯'), true);
+    assert.equal(isDecorativeLine('├─────┼────┤'), true);
+    assert.equal(isDecorativeLine('║  ═══  ║'), true);
+    assert.equal(isDecorativeLine('  │  '), true);
+    // Not decorative: blanks, text, CJK, block-element progress bars
+    assert.equal(isDecorativeLine(''), false);
+    assert.equal(isDecorativeLine('   '), false);
+    assert.equal(isDecorativeLine('── Title ──'), false);
+    assert.equal(isDecorativeLine('一二三'), false);
+    assert.equal(isDecorativeLine('███░░░ 60%'), false);
+  });
+
+  it('stripFrameBorders: peels side borders, keeps interior table separators', () => {
+    assert.equal(stripFrameBorders('│ hello world │'), 'hello world');
+    assert.equal(stripFrameBorders('│ name │ count │'), 'name │ count');
+    assert.equal(stripFrameBorders('║ boxed ║'), 'boxed');
+    assert.equal(stripFrameBorders('plain text'), 'plain text');
+    assert.equal(stripFrameBorders('── Title ──'), '── Title ──');
+    assert.equal(stripFrameBorders('│ 你好，世界 │'), '你好，世界');
+    // trailing pad spaces trimmed
+    assert.equal(stripFrameBorders('padded   '), 'padded');
+  });
+
+  it('cleanStreamLines: framed panel → readable text', () => {
+    const out = cleanStreamLines([
+      '╭──────────────────╮',
+      '│ pocket-term-2    │',
+      '│ 状态：正常        │',
+      '╰──────────────────╯',
+    ]);
+    assert.deepEqual(out, ['pocket-term-2', '状态：正常']);
+  });
+
+  it('cleanStreamLines: preserves mixed content, meaningful tables, ANSI stripped', () => {
+    const out = cleanStreamLines([
+      '\x1b[1m── 结果 ──\x1b[0m',
+      '│ file.js │ \x1b[32mok\x1b[0m │',
+      '├─────────┼────┤',
+      '│ next.js │ ok │',
+      'normal tail line',
+    ]);
+    assert.deepEqual(out, [
+      '── 结果 ──',
+      'file.js │ ok',
+      '',
+      'next.js │ ok',
+      'normal tail line',
+    ]);
+    assert.equal(out.join('\n').includes('\x1b'), false);
+  });
+
+  it('cleanStreamLines: decorative runs collapse with blank compression', () => {
+    const out = cleanStreamLines(['a', '────', '────', '', 'b']);
+    assert.deepEqual(out, ['a', '', 'b']);
+  });
+
+  it('foldBubbles drops frame lines from sealed bubble text', () => {
+    const bubbles = foldBubbles([
+      {
+        ts: 0,
+        lines: [
+          '╭────────────╮',
+          '│ 正文内容    │',
+          '╰────────────╯',
+          '────────────',
+          'after frame',
+        ],
+      },
+    ]);
+    assert.equal(bubbles.length, 1);
+    const text = bubbles[0].text;
+    assert.equal(/[╭╮╰╯]/.test(text), false, 'no corner chars remain');
+    assert.equal(/^─+$/m.test(text), false, 'no pure separator lines remain');
+    assert.match(text, /正文内容/);
+    assert.match(text, /after frame/);
+  });
+
+  it('foldBubbles yields no bubble for pure decorative noise', () => {
+    const bubbles = foldBubbles([
+      { ts: 0, lines: ['────────', '╭──╮', '│  │', '╰──╯'] },
+    ]);
+    assert.equal(bubbles.length, 0);
   });
 });
 

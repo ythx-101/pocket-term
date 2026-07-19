@@ -72,6 +72,7 @@ let sseTimer = null;
 let connMode = 'unknown'; // ok | warn | err | unknown
 let stickToBottom = true;
 let loadingEarlier = false;
+let bootFailed = false; // first state fetch failed → offline empty-state
 
 // —— settings ——
 function loadSettings() {
@@ -94,6 +95,11 @@ function loadSettings() {
   });
   const ver = $('#app-version');
   if (ver) ver.textContent = APP_VERSION;
+  // Keep browser chrome color in sync with the in-app theme toggle.
+  const chrome = $('meta[name="theme-color"]:not([media])');
+  if (chrome) {
+    chrome.setAttribute('content', theme === 'light' ? '#fffaf3' : '#232136');
+  }
 }
 
 function setTheme(theme) {
@@ -151,10 +157,27 @@ async function postSeen(paneId) {
 }
 
 // —— list rendering ——
+/** Loading / offline placeholder while no state yet; null once state exists. */
+function pendingStateNode() {
+  if (state != null) return null;
+  if (bootFailed) {
+    return el('div', {
+      className: 'empty offline',
+      text: '无法连接服务 · 点顶部圆点重试',
+    });
+  }
+  return el('div', { className: 'empty loading', text: '加载中…' });
+}
+
 function renderChatList() {
   const root = $('#chat-list');
   if (!root) return;
   root.replaceChildren();
+  const pending = pendingStateNode();
+  if (pending) {
+    root.append(pending);
+    return;
+  }
   const panes = sortPanes(state?.panes || []);
   if (!panes.length) {
     root.append(el('div', { className: 'empty', text: '暂无会话' }));
@@ -182,12 +205,20 @@ function renderChatList() {
         'aria-label': st.label,
       })
     );
+    const summary = el('div', { className: 'row-summary' });
+    if (p.agent_status === 'blocked') {
+      summary.append(
+        el('span', { className: 'row-badge blocked', text: '[等你回复]' })
+      );
+    } else if (p.agent_status === 'working') {
+      summary.append(
+        el('span', { className: 'row-badge working', text: '[进行中]' })
+      );
+    }
+    summary.append(document.createTextNode(p.summary || '暂无摘要'));
     const main = el('div', { className: 'row-main' }, [
       el('div', { className: 'row-title', text: title }),
-      el('div', {
-        className: 'row-summary',
-        text: p.summary || '暂无摘要',
-      }),
+      summary,
     ]);
     const meta = el('div', { className: 'row-meta' }, [
       el('div', {
@@ -205,6 +236,11 @@ function renderContacts() {
   const root = $('#contact-list');
   if (!root) return;
   root.replaceChildren();
+  const pending = pendingStateNode();
+  if (pending) {
+    root.append(pending);
+    return;
+  }
   const groups = groupContacts(state?.panes || []);
   if (!groups.length) {
     root.append(el('div', { className: 'empty', text: '暂无联系人' }));
@@ -288,13 +324,42 @@ function scrollToBottom(force = false) {
   }
 }
 
+/** WeChat-style chip text: HH:MM today, 昨天 HH:MM, else MM-DD HH:MM. */
+function timeChipText(ts) {
+  const d = new Date(ts);
+  if (Number.isNaN(d.getTime())) return '';
+  const hm = `${String(d.getHours()).padStart(2, '0')}:${String(
+    d.getMinutes()
+  ).padStart(2, '0')}`;
+  const now = new Date();
+  const dayStart = (x) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((dayStart(now) - dayStart(d)) / 86400000);
+  if (days <= 0) return hm;
+  if (days === 1) return `昨天 ${hm}`;
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${m}-${dd} ${hm}`;
+}
+
+const TIME_CHIP_GAP_MS = 10 * 60 * 1000;
+
 function renderBubbles(paneId) {
   const list = $('#bubble-list');
   if (!list) return;
   const bucket = ensureBubbleBucket(paneId);
   list.replaceChildren();
+  let lastChipTs = null;
   for (const msg of bucket.items) {
     const vm = mapBubbleToView(msg);
+    if (
+      vm.ts != null &&
+      (lastChipTs == null || vm.ts - lastChipTs >= TIME_CHIP_GAP_MS)
+    ) {
+      const chip = timeChipText(vm.ts);
+      if (chip) list.append(el('div', { className: 'time-chip', text: chip }));
+      lastChipTs = vm.ts;
+    }
     const row = el('div', { className: `bubble-row ${vm.side}` });
     const bubble = el('div', {
       className: `bubble ${vm.variant}`,
@@ -455,6 +520,7 @@ async function applyRoute() {
 // —— state apply ——
 function applyState(next) {
   state = next;
+  if (next != null) bootFailed = false;
   const herdr = next?.herdr;
   const banner = $('#banner-herdr');
   if (herdr === 'disconnected') {
@@ -645,7 +711,8 @@ async function boot() {
     setConn(s.herdr === 'disconnected' ? 'warn' : 'ok', s.herdr === 'disconnected' ? 'herdr 断开' : '已连接');
   } catch {
     setConn('err', '无法拉取状态');
-    applyState({ panes: [], herdr: 'disconnected' });
+    bootFailed = true;
+    applyState(null);
   }
   await applyRoute();
   connectSse();
