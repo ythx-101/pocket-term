@@ -21,6 +21,11 @@ import {
   dimToPercent,
   dimPercentToApi,
   wallpaperAssetUrl,
+  fileAssetUrl,
+  parseMessageImageSegments,
+  composeImageSendText,
+  reduceAttachPreview,
+  initialAttachPreview,
   DIM_SLIDER_MAX,
   shouldEmitToast,
   TOAST_DISMISS_MS,
@@ -98,6 +103,10 @@ let wallpaperCatalog = [];
 /** @type {ReturnType<typeof setTimeout>|null} */
 let dimSaveTimer = null;
 let wallpaperPanelOpen = false;
+/** @type {{ path: string|null }} pending chat image attachment (M2-P2) */
+let attachPreview = initialAttachPreview();
+/** @type {string|null} currently open fullscreen image src */
+let imageViewerSrc = null;
 
 // —— settings ——
 function getLocalPrefs() {
@@ -361,34 +370,172 @@ async function uploadImage(target, file) {
 }
 
 /**
- * Insert `[图片: <path>]` into composer (append with space if needed).
- * @param {string} pathAbs
+ * Render attach preview strip above the composer (Telegram-style).
  */
-function insertImagePathIntoComposer(pathAbs) {
-  const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
-  if (!input) return;
-  const token = `[图片: ${pathAbs}]`;
-  const cur = input.value;
-  if (!cur) {
-    input.value = token;
-  } else if (/\s$/.test(cur)) {
-    input.value = cur + token;
-  } else {
-    input.value = `${cur} ${token}`;
+function renderAttachPreview() {
+  const strip = $('#attach-preview');
+  if (!strip) return;
+  const pathAbs = attachPreview?.path || null;
+  strip.replaceChildren();
+  if (!pathAbs) {
+    strip.classList.add('hidden');
+    strip.setAttribute('aria-hidden', 'true');
+    return;
   }
-  autoSizeComposer(input);
-  input.focus();
-  // Move caret to end
-  const len = input.value.length;
-  try {
-    input.setSelectionRange(len, len);
-  } catch {
-    /* ignore */
+  strip.classList.remove('hidden');
+  strip.removeAttribute('aria-hidden');
+  const src = fileAssetUrl(BASE, pathAbs);
+  const thumb = el('img', {
+    className: 'attach-preview-thumb',
+    src,
+    alt: '待发送图片',
+    loading: 'lazy',
+  });
+  thumb.addEventListener('error', () => {
+    thumb.classList.add('broken');
+    thumb.removeAttribute('src');
+    thumb.alt = '预览失败';
+  });
+  const removeBtn = el(
+    'button',
+    {
+      type: 'button',
+      className: 'attach-preview-remove',
+      'aria-label': '移除图片',
+      title: '移除',
+      onClick: () => {
+        attachPreview = reduceAttachPreview(attachPreview, { type: 'remove' });
+        renderAttachPreview();
+      },
+    },
+    ['×']
+  );
+  strip.append(
+    el('div', { className: 'attach-preview-item' }, [thumb, removeBtn]),
+    el('span', { className: 'attach-preview-hint', text: '配文可选，点发送发出' })
+  );
+}
+
+/**
+ * Open fullscreen image viewer.
+ * @param {string} src
+ */
+function openImageViewer(src) {
+  const viewer = $('#image-viewer');
+  const img = /** @type {HTMLImageElement|null} */ ($('#image-viewer-img'));
+  if (!viewer || !img) return;
+  const wasOpen = !!imageViewerSrc;
+  imageViewerSrc = src;
+  img.src = src;
+  img.alt = '图片预览';
+  viewer.classList.remove('hidden');
+  viewer.removeAttribute('hidden');
+  document.body.classList.add('image-viewer-open');
+  // Push history entry so Android/browser back closes the viewer (返回手势).
+  if (!wasOpen) {
+    try {
+      history.pushState({ pt2ImageViewer: true }, '');
+    } catch {
+      /* ignore */
+    }
   }
 }
 
 /**
- * Chat attach flow: pick image → upload → insert path token.
+ * Close fullscreen image viewer.
+ * @param {{ fromPopstate?: boolean }} [opts]
+ */
+function closeImageViewer(opts = {}) {
+  const viewer = $('#image-viewer');
+  const img = /** @type {HTMLImageElement|null} */ ($('#image-viewer-img'));
+  if (!viewer) return;
+  const wasOpen = !!imageViewerSrc;
+  imageViewerSrc = null;
+  if (img) {
+    img.removeAttribute('src');
+    img.alt = '';
+  }
+  viewer.classList.add('hidden');
+  viewer.setAttribute('hidden', '');
+  document.body.classList.remove('image-viewer-open');
+  // If closed via UI (not back), drop the history entry we pushed.
+  if (wasOpen && !opts.fromPopstate) {
+    try {
+      if (history.state && history.state.pt2ImageViewer) {
+        history.back();
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
+/**
+ * Fill a bubble element with Telegram-style image segments + caption text.
+ * Shared by Tier A / Tier B / optimistic user bubbles via mapBubbleToView text.
+ * @param {HTMLElement} bubble
+ * @param {string} text
+ * @param {{ mono?: boolean }} [opts]
+ */
+function fillBubbleContent(bubble, text, opts = {}) {
+  const segments = parseMessageImageSegments(text);
+  const hasImage = segments.some((s) => s.type === 'image');
+  if (!hasImage) {
+    bubble.textContent = text || ' ';
+    return;
+  }
+  bubble.classList.add('has-image');
+  bubble.replaceChildren();
+  for (const seg of segments) {
+    if (seg.type === 'image') {
+      const src = fileAssetUrl(BASE, seg.path);
+      const img = el('img', {
+        className: 'bubble-img',
+        src,
+        alt: '图片',
+        loading: 'lazy',
+        decoding: 'async',
+      });
+      img.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        openImageViewer(src);
+      });
+      img.addEventListener('error', () => {
+        img.classList.add('broken');
+        img.removeAttribute('src');
+        img.alt = '图片已清理或无法加载';
+        // Placeholder block
+        const ph = el('div', {
+          className: 'bubble-img-placeholder',
+          text: '图片无法加载',
+          title: seg.path,
+        });
+        img.replaceWith(ph);
+      });
+      bubble.append(img);
+    } else {
+      const t = seg.text;
+      // Skip pure whitespace between token and caption edges unless mid-content
+      if (!t) continue;
+      // Preserve intentional caption including CJK; drop only all-whitespace
+      // segments that are just separators around image tokens.
+      if (!t.trim()) continue;
+      const caption = el('div', {
+        className: opts.mono ? 'bubble-caption mono' : 'bubble-caption',
+        text: t.trim(),
+      });
+      bubble.append(caption);
+    }
+  }
+  // If somehow only images and all text was whitespace, keep a minimal height
+  if (!bubble.childNodes.length) {
+    bubble.textContent = ' ';
+  }
+}
+
+/**
+ * Chat attach flow: pick image → upload → preview strip (not path-in-input).
  * @param {File} file
  */
 async function handleChatImageUpload(file) {
@@ -402,8 +549,14 @@ async function handleChatImageUpload(file) {
   try {
     const result = await uploadImage('chat', file);
     if (!result.path) throw new Error('missing_path');
-    insertImagePathIntoComposer(String(result.path));
-    showToast('图片已插入', 'info');
+    attachPreview = reduceAttachPreview(attachPreview, {
+      type: 'set',
+      path: String(result.path),
+    });
+    renderAttachPreview();
+    const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
+    input?.focus();
+    showToast('图片已附加', 'info');
   } catch (err) {
     const code = /** @type {any} */ (err)?.code || err?.message;
     if (code === 'payload_too_large' || /** @type {any} */ (err)?.status === 413) {
@@ -644,6 +797,7 @@ async function postSend(paneId, text, mode = 'run') {
  *   text: string,
  *   mode?: 'run'|'text',
  *   clearInput?: boolean,
+ *   useAttach?: boolean,
  *   skipConfirm?: boolean,
  *   label?: string,
  * }} opts
@@ -655,8 +809,19 @@ async function sendToActivePane(opts) {
     showToast('当前为只读模式', 'warn');
     return;
   }
-  const text = opts.text ?? '';
+  // Merge attach preview into outbound text (agent still sees [图片: path] form).
+  const rawText = opts.text ?? '';
+  const attachPath =
+    opts.useAttach !== false && attachPreview?.path ? attachPreview.path : null;
+  const text =
+    attachPath != null
+      ? composeImageSendText(rawText, attachPath)
+      : rawText;
   const mode = opts.mode === 'text' ? 'text' : 'run';
+  // Hotkeys / empty enter: do not require attach; skip if nothing to send.
+  if (!text && mode === 'run' && !opts.label) {
+    /* allow empty run for 回车 hotkey via label */
+  }
   if (
     !opts.skipConfirm &&
     shouldConfirmBeforeSend(getLocalPrefs(), text, {
@@ -683,6 +848,7 @@ async function sendToActivePane(opts) {
       return;
     }
     // Optimistic right bubble for typed text (SSE may also deliver; deduped ±10s).
+    // Image+caption renders via fillBubbleContent (same path as Tier A/B).
     if (text) {
       const ts = Date.now();
       appendBubble(paneId, {
@@ -697,6 +863,10 @@ async function sendToActivePane(opts) {
       if (input) {
         input.value = '';
         autoSizeComposer(input);
+      }
+      if (attachPath != null) {
+        attachPreview = reduceAttachPreview(attachPreview, { type: 'send' });
+        renderAttachPreview();
       }
     }
   } catch {
@@ -920,8 +1090,8 @@ function renderBubbles(paneId) {
     const row = el('div', { className: `bubble-row ${vm.side}` });
     const bubble = el('div', {
       className: `bubble ${vm.variant}`,
-      text: vm.text || ' ',
     });
+    fillBubbleContent(bubble, vm.text || ' ', { mono: vm.mono });
     row.append(bubble);
     list.append(row);
   }
@@ -1291,7 +1461,7 @@ function wire() {
     if (file) handleWallpaperImageUpload(file);
   });
 
-  // Chat attach image (M2-P1)
+  // Chat attach image (M2-P1 / M2-P2 preview strip)
   $('#btn-attach')?.addEventListener('click', () => {
     const input = /** @type {HTMLInputElement|null} */ ($('#attach-input'));
     input?.click();
@@ -1303,10 +1473,41 @@ function wire() {
     if (file) handleChatImageUpload(file);
   });
 
+  // Fullscreen image viewer (M2-P2)
+  const viewer = $('#image-viewer');
+  viewer?.addEventListener('click', (ev) => {
+    // Click backdrop or image closes (Telegram-style dismiss)
+    const t = /** @type {HTMLElement} */ (ev.target);
+    if (
+      t.id === 'image-viewer' ||
+      t.id === 'image-viewer-img' ||
+      t.id === 'image-viewer-close' ||
+      t.classList?.contains('image-viewer-close')
+    ) {
+      closeImageViewer();
+    }
+  });
+  $('#image-viewer-close')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    closeImageViewer();
+  });
+  document.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && imageViewerSrc) {
+      closeImageViewer();
+    }
+  });
+  window.addEventListener('popstate', () => {
+    if (imageViewerSrc) {
+      closeImageViewer({ fromPopstate: true });
+    }
+  });
+
   // Composer: tap send (do not hijack Enter — mobile IME safe)
   $('#btn-send')?.addEventListener('click', () => {
     const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
     const text = input?.value ?? '';
+    // Allow send with only attach (empty caption)
+    if (!text.trim() && !attachPreview?.path) return;
     sendToActivePane({ text, mode: 'run', clearInput: true });
   });
   const composerInput = /** @type {HTMLTextAreaElement|null} */ (
@@ -1331,6 +1532,7 @@ function wire() {
           text: payload.text,
           mode: payload.mode,
           clearInput: false,
+          useAttach: false,
           skipConfirm: payload.mode === 'run' && payload.text === '',
           label: payload.label,
         });
@@ -1346,6 +1548,7 @@ function wire() {
       text: payload.text,
       mode: payload.mode,
       clearInput: false,
+      useAttach: false,
       skipConfirm: true,
       label: '回车确认',
     });

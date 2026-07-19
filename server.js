@@ -29,8 +29,17 @@ export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** Default chat upload sink (shared with pocket-term terminal uploads). */
 export const DEFAULT_CHAT_UPLOAD_DIR = '/srv/term-uploads';
 
+/**
+ * Hardcoded whitelist root for GET /herd/api/file (M2-P2).
+ * Not taken from user input — only realpaths under this tree are served.
+ */
+export const DEFAULT_FILE_SERVE_ROOT = '/srv/term-uploads';
+
 /** Allowed image extensions for POST /herd/api/upload. */
 export const UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+
+/** Image extensions allowed for GET /herd/api/file. */
+export const FILE_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 
 /** Fingerprinted SPA assets: long-cache + ?v= rewrite in HTML (and app.js→spa-utils). */
 export const FINGERPRINTED_ASSETS = new Set([
@@ -45,6 +54,8 @@ export const CACHE_FINGERPRINTED = 'public, max-age=31536000, immutable';
 export const CACHE_HTML = 'no-store';
 /** Cache-Control for wallpaper images. */
 export const CACHE_WALLPAPER = 'public, max-age=86400';
+/** Cache-Control for chat upload files (GET /herd/api/file). */
+export const CACHE_FILE = 'public, max-age=86400';
 
 const WALLPAPER_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 
@@ -646,6 +657,79 @@ export async function listWallpapers(stateDir) {
 }
 
 /**
+ * Resolve a chat-upload file for GET /herd/api/file?path=<abs-path>.
+ * Hardcoded whitelist root (default `/srv/term-uploads`); realpath must stay
+ * under that tree (symlink escape → 403). Image extension whitelist only.
+ *
+ * @param {string|null|undefined} rawPath absolute path from query
+ * @param {string} [root] serve root (tests may override; prod = DEFAULT_FILE_SERVE_ROOT)
+ * @returns {Promise<
+ *   | { ok: true, file: string, ext: string }
+ *   | { ok: false, status: number }
+ * >}
+ */
+export async function resolveChatUploadFile(
+  rawPath,
+  root = DEFAULT_FILE_SERVE_ROOT
+) {
+  if (rawPath == null || rawPath === '') return { ok: false, status: 403 };
+  const raw = String(rawPath);
+  if (raw.includes('\0')) return { ok: false, status: 403 };
+  // Must be absolute POSIX-style path (no Windows drive games).
+  if (!raw.startsWith('/')) return { ok: false, status: 403 };
+  // Reject traversal tokens before resolve.
+  if (
+    raw.includes('..') ||
+    raw.includes('\\') ||
+    raw.split('/').some((seg) => seg === '..')
+  ) {
+    return { ok: false, status: 403 };
+  }
+
+  const ext = path.extname(raw).toLowerCase();
+  if (!FILE_IMAGE_EXTS.has(ext)) return { ok: false, status: 403 };
+
+  let rootReal;
+  try {
+    rootReal = path.resolve(await fs.realpath(root));
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  const rootPrefix = rootReal.endsWith(path.sep)
+    ? rootReal
+    : rootReal + path.sep;
+
+  // Lexical containment under root (resolved, still absolute).
+  const candidate = path.resolve(raw);
+  if (candidate === rootReal || !candidate.startsWith(rootPrefix)) {
+    return { ok: false, status: 403 };
+  }
+
+  // realpath collapses symlinks — must still sit under rootReal.
+  let realFile;
+  try {
+    realFile = path.resolve(await fs.realpath(candidate));
+  } catch {
+    return { ok: false, status: 404 };
+  }
+  if (realFile === rootReal || !realFile.startsWith(rootPrefix)) {
+    return { ok: false, status: 403 };
+  }
+
+  const realExt = path.extname(realFile).toLowerCase();
+  if (!FILE_IMAGE_EXTS.has(realExt)) return { ok: false, status: 403 };
+
+  try {
+    const st = await fs.stat(realFile);
+    if (!st.isFile()) return { ok: false, status: 404 };
+  } catch {
+    return { ok: false, status: 404 };
+  }
+
+  return { ok: true, file: realFile, ext: realExt };
+}
+
+/**
  * Resolve a wallpaper file under state/wallpapers with strict basename checks.
  * Rejects traversal (`..`, encoded variants, separators).
  *
@@ -785,6 +869,7 @@ export async function resolveStatic(urlPath, publicDir = PUBLIC_DIR) {
  *   readonly?: boolean,
  *   assetVersion?: string,
  *   chatUploadDir?: string,
+ *   fileServeRoot?: string,
  * }} [options]
  */
 export async function startServer(options = {}) {
@@ -796,6 +881,11 @@ export async function startServer(options = {}) {
     options.chatUploadDir ??
     process.env.PT2_CHAT_UPLOAD_DIR ??
     DEFAULT_CHAT_UPLOAD_DIR;
+  // Hardcoded production root; tests may inject a temp dir via options.
+  const fileServeRoot =
+    options.fileServeRoot ??
+    process.env.PT2_FILE_SERVE_ROOT ??
+    DEFAULT_FILE_SERVE_ROOT;
   const readonly =
     options.readonly === true ||
     process.env.PT2_READONLY === '1' ||
@@ -973,6 +1063,34 @@ export async function startServer(options = {}) {
         sendJson(res, 200, result);
       } catch (err) {
         sendJson(res, 500, { error: err?.message || 'seen failed' });
+      }
+      return;
+    }
+
+    // --- chat upload file serve (M2-P2) ---
+    if (pathname === '/herd/api/file' && (method === 'GET' || method === 'HEAD')) {
+      const pathParam = url.searchParams.get('path');
+      const resolved = await resolveChatUploadFile(pathParam, fileServeRoot);
+      if (!resolved.ok) {
+        sendText(
+          res,
+          resolved.status,
+          resolved.status === 404 ? 'not found' : 'forbidden'
+        );
+        return;
+      }
+      try {
+        const data = await fs.readFile(resolved.file);
+        const type = MIME[resolved.ext] || 'application/octet-stream';
+        res.writeHead(200, {
+          'Content-Type': type,
+          'Content-Length': data.length,
+          'Cache-Control': CACHE_FILE,
+        });
+        if (method === 'HEAD') res.end();
+        else res.end(data);
+      } catch {
+        sendText(res, 404, 'not found');
       }
       return;
     }

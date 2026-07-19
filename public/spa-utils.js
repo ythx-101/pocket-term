@@ -413,6 +413,165 @@ export function wallpaperAssetUrl(base, name) {
   return `${b}/api/wallpaper/${encodeURIComponent(name)}`;
 }
 
+/**
+ * URL for a chat-upload image via GET /herd/api/file?path=.
+ * @param {string} base e.g. "/herd"
+ * @param {string} absPath absolute path under /srv/term-uploads/
+ * @returns {string}
+ */
+export function fileAssetUrl(base, absPath) {
+  const b = String(base || '').replace(/\/$/, '');
+  return `${b}/api/file?path=${encodeURIComponent(String(absPath || ''))}`;
+}
+
+/** Image extensions recognized in message text / file endpoint. */
+export const MSG_IMAGE_EXTS = 'jpg|jpeg|png|webp|gif';
+
+/**
+ * Whether a path is a serveable chat-upload image path.
+ * @param {string} p
+ * @returns {boolean}
+ */
+export function isChatUploadImagePath(p) {
+  const s = String(p || '');
+  if (!s.startsWith('/srv/term-uploads/')) return false;
+  // basename only after the prefix (no further traversal)
+  const rest = s.slice('/srv/term-uploads/'.length);
+  if (!rest || rest.includes('/') || rest.includes('\\') || rest.includes('..')) {
+    return false;
+  }
+  return new RegExp(`\\.(?:${MSG_IMAGE_EXTS})$`, 'i').test(rest);
+}
+
+/**
+ * Parse bubble text into text / image segments for Telegram-style rendering.
+ * Matches `[图片: /srv/term-uploads/<name>]` or bare
+ * `/srv/term-uploads/<name>.(jpg|jpeg|png|webp|gif)`.
+ *
+ * @param {string|null|undefined} text
+ * @returns {Array<{ type: 'text', text: string } | { type: 'image', path: string }>}
+ */
+export function parseMessageImageSegments(text) {
+  const s = String(text ?? '');
+  if (!s) return [{ type: 'text', text: '' }];
+
+  const bracket =
+    /\[图片:\s*(\/srv\/term-uploads\/[^\]\n]+?)\]/g;
+  const bare = new RegExp(
+    `(\\/srv\\/term-uploads\\/[^\\s\\[\\]<>"']+\\.(?:${MSG_IMAGE_EXTS}))`,
+    'gi'
+  );
+
+  /** @type {Array<{ start: number, end: number, path: string }>} */
+  const hits = [];
+
+  let m;
+  while ((m = bracket.exec(s)) !== null) {
+    const p = m[1].trim();
+    if (isChatUploadImagePath(p)) {
+      hits.push({ start: m.index, end: m.index + m[0].length, path: p });
+    }
+  }
+  while ((m = bare.exec(s)) !== null) {
+    const p = m[1];
+    if (!isChatUploadImagePath(p)) continue;
+    // Skip if already covered by a bracket match
+    const covered = hits.some((h) => m.index >= h.start && m.index < h.end);
+    if (covered) continue;
+    hits.push({ start: m.index, end: m.index + m[0].length, path: p });
+  }
+
+  hits.sort((a, b) => a.start - b.start || a.end - b.end);
+
+  // Drop overlaps (keep earlier / longer)
+  /** @type {typeof hits} */
+  const clean = [];
+  for (const h of hits) {
+    const last = clean[clean.length - 1];
+    if (last && h.start < last.end) continue;
+    clean.push(h);
+  }
+
+  if (!clean.length) return [{ type: 'text', text: s }];
+
+  /** @type {Array<{ type: 'text', text: string } | { type: 'image', path: string }>} */
+  const segments = [];
+  let cursor = 0;
+  for (const h of clean) {
+    if (h.start > cursor) {
+      segments.push({ type: 'text', text: s.slice(cursor, h.start) });
+    }
+    segments.push({ type: 'image', path: h.path });
+    cursor = h.end;
+  }
+  if (cursor < s.length) {
+    segments.push({ type: 'text', text: s.slice(cursor) });
+  }
+  return segments;
+}
+
+/**
+ * Whether message text contains at least one renderable chat image.
+ * @param {string|null|undefined} text
+ */
+export function messageHasChatImage(text) {
+  return parseMessageImageSegments(text).some((seg) => seg.type === 'image');
+}
+
+/**
+ * Build send payload text from optional attach path + caption.
+ * Agent-compatible form: `[图片: <path>] <caption>`.
+ *
+ * @param {string|null|undefined} caption
+ * @param {string|null|undefined} imagePath
+ * @returns {string}
+ */
+export function composeImageSendText(caption, imagePath) {
+  const pathAbs = imagePath != null && String(imagePath) ? String(imagePath) : '';
+  const cap = caption != null ? String(caption) : '';
+  if (!pathAbs) return cap;
+  const token = `[图片: ${pathAbs}]`;
+  const trimmed = cap.trim();
+  if (!trimmed) return token;
+  return `${token} ${trimmed}`;
+}
+
+/**
+ * Attach preview strip state machine (select / remove / send-clear).
+ * @typedef {{ path: string|null }} AttachPreviewState
+ * @typedef {
+ *   | { type: 'set', path: string }
+ *   | { type: 'remove' }
+ *   | { type: 'clear' }
+ *   | { type: 'send' }
+ * } AttachPreviewAction
+ *
+ * @param {AttachPreviewState|null|undefined} state
+ * @param {AttachPreviewAction} action
+ * @returns {AttachPreviewState}
+ */
+export function reduceAttachPreview(state, action) {
+  const cur = state && typeof state === 'object' ? state : { path: null };
+  const t = action && action.type;
+  if (t === 'set') {
+    const p = action.path != null ? String(action.path) : '';
+    if (!p) return { path: null };
+    return { path: p };
+  }
+  if (t === 'remove' || t === 'clear' || t === 'send') {
+    return { path: null };
+  }
+  return { path: cur.path != null ? cur.path : null };
+}
+
+/**
+ * Initial attach preview state.
+ * @returns {AttachPreviewState}
+ */
+export function initialAttachPreview() {
+  return { path: null };
+}
+
 /** Collapse identical toast text within this window (ms). */
 export const TOAST_COLLAPSE_MS = 3000;
 /** Auto-dismiss toast after this many ms. */
