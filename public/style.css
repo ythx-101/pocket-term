@@ -310,6 +310,32 @@ html.has-wallpaper .topbar {
   padding-top: 0.5rem;
 }
 
+/* —— in-app notification banner (M2.5) —— */
+.banner.notify {
+  padding: 0;
+  cursor: pointer;
+}
+.banner-notify-link {
+  display: block;
+  padding: 0.4rem 0.75rem;
+  /* Owns the top inset when it is the topmost visible banner. */
+  padding-top: max(0.4rem, env(safe-area-inset-top, 0px));
+  color: inherit;
+  text-decoration: none;
+}
+.banner.notify.done {
+  background: color-mix(in srgb, var(--ok) 18%, transparent);
+  color: var(--ok);
+}
+/* Any visible banner strips the inset from the view topbar. */
+#banner-notify:not(.hidden) ~ .view .topbar {
+  padding-top: 0.5rem;
+}
+/* herdr banner above is visible → it owns the inset, not the notify link. */
+#banner-herdr:not(.hidden) ~ #banner-notify .banner-notify-link {
+  padding-top: 0.4rem;
+}
+
 /* —— chat list rows —— */
 .list {
   flex: 1;
@@ -1265,6 +1291,30 @@ body.chat-open .toast-host {
 .tab-icon {
   font-size: 1.15rem;
   line-height: 1;
+}
+.tab-icon-wrap {
+  position: relative;
+  display: inline-flex;
+}
+/* 会话 tab notification count (M2.5) */
+.tab-badge {
+  position: absolute;
+  top: -4px;
+  right: -10px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+  text-align: center;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+.tab-badge.hidden {
+  display: none;
 }
 
 .empty {

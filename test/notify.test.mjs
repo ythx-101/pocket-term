@@ -1,8 +1,11 @@
 /**
  * M2.5 in-app notification helpers — pure, deterministic (injected clock).
  */
-import { describe, it } from 'node:test';
+import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   NOTIFY_STATUSES,
   NOTIFY_DEBOUNCE_MS,
@@ -15,6 +18,8 @@ import {
   notifyBannerView,
   parseNotifyToggle,
 } from '../public/spa-utils.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const T0 = Date.parse('2026-07-19T12:00:00.000Z');
 
@@ -379,5 +384,89 @@ describe('notify: presentation helpers', () => {
   it('constants: statuses and window', () => {
     assert.deepEqual(NOTIFY_STATUSES, ['blocked', 'done']);
     assert.equal(NOTIFY_DEBOUNCE_MS, 60_000);
+  });
+});
+
+describe('notify: SPA wiring (static source)', () => {
+  let html;
+  let appJs;
+  let css;
+
+  before(async () => {
+    const pub = path.join(__dirname, '..', 'public');
+    html = await fs.readFile(path.join(pub, 'index.html'), 'utf8');
+    appJs = await fs.readFile(path.join(pub, 'app.js'), 'utf8');
+    css = await fs.readFile(path.join(pub, 'style.css'), 'utf8');
+  });
+
+  it('index.html has clickable banner, tab badge, and both toggles', () => {
+    assert.match(html, /id="banner-notify"/);
+    assert.match(html, /id="banner-notify-link"[^>]*href=/);
+    assert.match(html, /id="banner-notify-text"/);
+    assert.match(html, /id="tab-badge-chats"/);
+    assert.match(html, /id="toggle-notify-blocked"[^>]*role="switch"/s);
+    assert.match(html, /id="toggle-notify-done"[^>]*role="switch"/s);
+    assert.match(html, /等你回复通知/);
+    assert.match(html, /完成通知/);
+    assert.match(html, /页内通知/);
+  });
+
+  it('app.js wires reducer into state apply and consume into pane open', () => {
+    assert.match(appJs, /reduceNotifications/);
+    assert.match(appJs, /function applyState[\s\S]*?reduceNotifications\(/);
+    assert.match(
+      appJs,
+      /async function enterChat[\s\S]{0,300}consumePaneNotifications\(/
+    );
+    assert.match(appJs, /'pt2-notify-blocked'/);
+    assert.match(appJs, /'pt2-notify-done'/);
+    assert.match(appJs, /#toggle-notify-blocked/);
+    assert.match(appJs, /#toggle-notify-done/);
+    assert.match(appJs, /formatNotifyBadge/);
+    assert.match(appJs, /notifyBannerView/);
+  });
+
+  it('style.css styles banner variants, badge, and safe-area ownership', () => {
+    assert.match(css, /\.banner\.notify\s*\{/);
+    assert.match(css, /\.banner\.notify\.done\s*\{/);
+    assert.match(css, /\.tab-badge\s*\{/);
+    assert.match(css, /#banner-notify:not\(\.hidden\) ~ \.view \.topbar/);
+    assert.match(css, /\.banner-notify-link[\s\S]*?safe-area-inset-top/);
+  });
+
+  it('no service-worker / Web Push / VAPID / system-notification artifacts', async () => {
+    const root = path.join(__dirname, '..');
+    const sources = {
+      'public/index.html': html,
+      'public/app.js': appJs,
+      'public/style.css': css,
+      'public/spa-utils.js': await fs.readFile(
+        path.join(root, 'public', 'spa-utils.js'),
+        'utf8'
+      ),
+      'server.js': await fs.readFile(path.join(root, 'server.js'), 'utf8'),
+    };
+    const forbidden = [
+      /service[-_]?worker/i,
+      /PushManager/,
+      /PushSubscription/,
+      /applicationServerKey/,
+      /vapid/i,
+      /push-subs/,
+      /new\s+Notification\s*\(/,
+      /requestPermission/,
+    ];
+    for (const [file, src] of Object.entries(sources)) {
+      for (const re of forbidden) {
+        assert.doesNotMatch(src, re, `${file} must not contain ${re}`);
+      }
+    }
+    const pubFiles = await fs.readdir(path.join(root, 'public'));
+    const forbiddenNames = /^(sw|service-worker|push.*)\.js$|\.webmanifest$/i;
+    assert.deepEqual(
+      pubFiles.filter((f) => forbiddenNames.test(f)),
+      [],
+      'no service worker / push / manifest files in public/'
+    );
   });
 });

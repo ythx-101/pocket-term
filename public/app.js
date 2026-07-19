@@ -29,6 +29,14 @@ import {
   DIM_SLIDER_MAX,
   shouldEmitToast,
   TOAST_DISMISS_MS,
+  initialNotifyState,
+  reduceNotifications,
+  consumePaneNotifications,
+  pendingNotifyCount,
+  latestPendingNotification,
+  formatNotifyBadge,
+  notifyBannerView,
+  parseNotifyToggle,
 } from './spa-utils.js';
 
 const APP_VERSION = '0.2.0';
@@ -36,6 +44,8 @@ const LS_THEME = 'pt2-theme';
 const LS_FONT = 'pt2-font';
 const LS_CONFIRM_SEND = 'pt2-confirm-send';
 const LS_LOCAL_READONLY = 'pt2-local-readonly';
+const LS_NOTIFY_BLOCKED = 'pt2-notify-blocked';
+const LS_NOTIFY_DONE = 'pt2-notify-done';
 
 /** API base: /herd when served under /herd/ */
 function apiBase() {
@@ -107,6 +117,8 @@ let wallpaperPanelOpen = false;
 let attachPreview = initialAttachPreview();
 /** @type {string|null} currently open fullscreen image src */
 let imageViewerSrc = null;
+/** In-app notification state (M2.5): baseline + pending + debounce. */
+let notifyState = initialNotifyState();
 
 // —— settings ——
 function getLocalPrefs() {
@@ -114,6 +126,49 @@ function getLocalPrefs() {
     confirmBeforeSend: localStorage.getItem(LS_CONFIRM_SEND) === '1',
     localReadonly: localStorage.getItem(LS_LOCAL_READONLY) === '1',
   };
+}
+
+/** Independent notification toggles; absent = enabled. */
+function getNotifyPrefs() {
+  return {
+    blocked: parseNotifyToggle(localStorage.getItem(LS_NOTIFY_BLOCKED)),
+    done: parseNotifyToggle(localStorage.getItem(LS_NOTIFY_DONE)),
+  };
+}
+
+/** Render notification banner + 会话 tab badge from notifyState. */
+function renderNotifyUI() {
+  const badge = $('#tab-badge-chats');
+  if (badge) {
+    const text = formatNotifyBadge(pendingNotifyCount(notifyState));
+    badge.textContent = text;
+    badge.classList.toggle('hidden', !text);
+  }
+  const chatsTab = $('#tab-bar .tab[data-tab="chats"]');
+  if (chatsTab) {
+    const n = pendingNotifyCount(notifyState);
+    chatsTab.setAttribute(
+      'aria-label',
+      n > 0 ? `会话，${n} 条新通知` : '会话'
+    );
+  }
+
+  const banner = $('#banner-notify');
+  const link = /** @type {HTMLAnchorElement|null} */ ($('#banner-notify-link'));
+  const textEl = $('#banner-notify-text');
+  if (!banner || !link || !textEl) return;
+  const latest = latestPendingNotification(notifyState);
+  const view = latest ? notifyBannerView(latest, getPane(latest.paneId)) : null;
+  if (!view) {
+    banner.classList.add('hidden');
+    banner.classList.remove('done');
+    return;
+  }
+  banner.classList.remove('hidden');
+  banner.classList.toggle('done', view.status === 'done');
+  link.setAttribute('href', view.href);
+  link.setAttribute('aria-label', `打开会话：${view.text}`);
+  textEl.textContent = view.text;
 }
 
 /**
@@ -189,6 +244,13 @@ function loadSettings() {
     $('#toggle-local-readonly')
   );
   if (roEl) roEl.checked = prefs.localReadonly;
+  const notifyPrefs = getNotifyPrefs();
+  const nbEl = /** @type {HTMLInputElement|null} */ (
+    $('#toggle-notify-blocked')
+  );
+  if (nbEl) nbEl.checked = notifyPrefs.blocked;
+  const ndEl = /** @type {HTMLInputElement|null} */ ($('#toggle-notify-done'));
+  if (ndEl) ndEl.checked = notifyPrefs.done;
   // Keep browser chrome color in sync with the in-app theme toggle.
   const chrome = $('meta[name="theme-color"]:not([media])');
   if (chrome) {
@@ -1204,6 +1266,9 @@ function updateChatHeader(paneId) {
 
 async function enterChat(paneId) {
   activePaneId = paneId;
+  // Opening the pane consumes its pending notifications (M2.5).
+  notifyState = consumePaneNotifications(notifyState, paneId).state;
+  renderNotifyUI();
   updateChatHeader(paneId);
   stickToBottom = true;
   try {
@@ -1271,6 +1336,20 @@ function applyState(next) {
   ingestServerSettings(next);
   updateHerdrAbout();
   updateComposerVisibility();
+  if (next != null) {
+    const reduced = reduceNotifications(
+      notifyState,
+      next.panes || [],
+      getNotifyPrefs(),
+      Date.now()
+    );
+    notifyState = reduced.state;
+    // The open chat is already on screen — its notifications are seen.
+    if (activePaneId) {
+      notifyState = consumePaneNotifications(notifyState, activePaneId).state;
+    }
+  }
+  renderNotifyUI();
   if (activePaneId) {
     updateChatHeader(activePaneId);
   }
@@ -1437,6 +1516,16 @@ function wire() {
     const on = /** @type {HTMLInputElement} */ (ev.target).checked;
     localStorage.setItem(LS_LOCAL_READONLY, on ? '1' : '0');
     updateComposerVisibility();
+  });
+
+  // Notification toggles (M2.5): affect future emissions only.
+  $('#toggle-notify-blocked')?.addEventListener('change', (ev) => {
+    const on = /** @type {HTMLInputElement} */ (ev.target).checked;
+    localStorage.setItem(LS_NOTIFY_BLOCKED, on ? '1' : '0');
+  });
+  $('#toggle-notify-done')?.addEventListener('change', (ev) => {
+    const on = /** @type {HTMLInputElement} */ (ev.target).checked;
+    localStorage.setItem(LS_NOTIFY_DONE, on ? '1' : '0');
   });
 
   // Wallpaper picker + dim (M2)

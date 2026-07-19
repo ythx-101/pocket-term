@@ -25,6 +25,13 @@
         herdr 已断开 · 正在重连…
       </div>
 
+      <!-- in-app notification banner (M2.5): click jumps to the pane -->
+      <div id="banner-notify" class="banner notify hidden" role="status">
+        <a id="banner-notify-link" class="banner-notify-link" href="#/chats">
+          <span id="banner-notify-text"></span>
+        </a>
+      </div>
+
       <!-- 会话列表 -->
       <section id="view-chats" class="view" data-view="chats">
         <header class="topbar">
@@ -290,6 +297,30 @@
             </p>
           </div>
           <div class="settings-group">
+            <div class="settings-label">通知</div>
+            <label class="toggle-row">
+              <span>等你回复通知</span>
+              <input
+                id="toggle-notify-blocked"
+                type="checkbox"
+                role="switch"
+                aria-label="等你回复通知"
+              />
+            </label>
+            <label class="toggle-row">
+              <span>完成通知</span>
+              <input
+                id="toggle-notify-done"
+                type="checkbox"
+                role="switch"
+                aria-label="完成通知"
+              />
+            </label>
+            <p class="settings-hint">
+              页内通知：顶部横幅 + 「会话」角标；仅本机浏览器，打开会话即清除
+            </p>
+          </div>
+          <div class="settings-group">
             <div class="settings-label">字号</div>
             <div class="seg" role="group" aria-label="字号">
               <button type="button" class="seg-btn" data-font-set="sm">
@@ -318,7 +349,10 @@
 
       <nav id="tab-bar" class="tab-bar" aria-label="主导航">
         <a href="#/chats" class="tab" data-tab="chats">
-          <span class="tab-icon">💬</span>
+          <span class="tab-icon-wrap">
+            <span class="tab-icon">💬</span>
+            <span id="tab-badge-chats" class="tab-badge hidden" aria-hidden="true"></span>
+          </span>
           <span>会话</span>
         </a>
         <a href="#/contacts" class="tab" data-tab="contacts">
