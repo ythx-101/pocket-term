@@ -302,6 +302,182 @@ describe('POST /herd/api/pane/:id/send guards', () => {
   });
 });
 
+describe('atomic rate-limit reservation (concurrent sends)', () => {
+  it('two concurrent sends to same pane → exactly one 200 and one 429', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-race-'));
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let sendCalls = 0;
+    const mockClient = {
+      allowWrite: true,
+      rpc: async (method, _params, callOpts = {}) => {
+        if (method === 'ping') {
+          return { type: 'pong', protocol: 16, version: '0.7.3' };
+        }
+        if (method === 'session.snapshot') {
+          return {
+            snapshot: {
+              workspaces: [],
+              tabs: [],
+              panes: [{ pane_id: 'w0:pRace', agent_status: 'unknown' }],
+              agents: [],
+            },
+          };
+        }
+        if (method === 'pane.read') return { read: { text: '' } };
+        if (method === 'events.wait') {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(resolve, 200);
+            const sig = callOpts.signal;
+            if (sig) {
+              const onAbort = () => {
+                clearTimeout(t);
+                const err = new Error('aborted');
+                err.code = 'aborted';
+                reject(err);
+              };
+              if (sig.aborted) {
+                onAbort();
+                return;
+              }
+              sig.addEventListener('abort', onAbort, { once: true });
+            }
+          });
+          const err = new Error('timeout');
+          err.code = 'timeout';
+          throw err;
+        }
+        if (method === 'pane.send_text' || method === 'pane.run') {
+          sendCalls += 1;
+          inFlight += 1;
+          maxInFlight = Math.max(maxInFlight, inFlight);
+          // Hold the slot long enough that a sibling request overlaps the await.
+          await new Promise((r) => setTimeout(r, 80));
+          inFlight -= 1;
+          return { type: 'ok' };
+        }
+        const err = new Error(`unexpected ${method}`);
+        err.code = 'method_not_allowed';
+        throw err;
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+
+    const srv = await startServer({
+      host: '127.0.0.1',
+      port: 0,
+      stateDir,
+      client: mockClient,
+    });
+    const base = `http://127.0.0.1:${srv.port}`;
+    try {
+      for (let i = 0; i < 30; i++) {
+        const st = await (await fetch(`${base}/herd/api/state`)).json();
+        if (st.panes?.some((p) => p.pane_id === 'w0:pRace')) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      const [a, b] = await Promise.all([
+        postSend(base, 'w0:pRace', { text: 'concurrent-a' }),
+        postSend(base, 'w0:pRace', { text: 'concurrent-b' }),
+      ]);
+      const statuses = [a.res.status, b.res.status].sort((x, y) => x - y);
+      assert.deepEqual(
+        statuses,
+        [200, 429],
+        `expected one 200 and one 429, got ${a.res.status}/${b.res.status}`
+      );
+      const limited = a.res.status === 429 ? a : b;
+      assert.equal(limited.json.error, 'rate_limited');
+      // Only the winner should have reached herdr (reservation blocks the loser).
+      assert.equal(sendCalls, 1, `herdr send calls should be 1, got ${sendCalls}`);
+    } finally {
+      await srv.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it('failed send releases reservation so a retry can proceed', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-release-'));
+    let failNext = true;
+    const mockClient = {
+      allowWrite: true,
+      rpc: async (method, _params, callOpts = {}) => {
+        if (method === 'ping') {
+          return { type: 'pong', protocol: 16, version: '0.7.3' };
+        }
+        if (method === 'session.snapshot') {
+          return {
+            snapshot: {
+              workspaces: [],
+              tabs: [],
+              panes: [{ pane_id: 'w0:pFail' }],
+              agents: [],
+            },
+          };
+        }
+        if (method === 'pane.read') return { read: { text: '' } };
+        if (method === 'events.wait') {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(resolve, 200);
+            const sig = callOpts.signal;
+            if (sig) {
+              const onAbort = () => {
+                clearTimeout(t);
+                const err = new Error('aborted');
+                err.code = 'aborted';
+                reject(err);
+              };
+              if (sig.aborted) {
+                onAbort();
+                return;
+              }
+              sig.addEventListener('abort', onAbort, { once: true });
+            }
+          });
+          const err = new Error('timeout');
+          err.code = 'timeout';
+          throw err;
+        }
+        if (method === 'pane.send_text' || method === 'pane.run') {
+          if (failNext) {
+            failNext = false;
+            const err = new Error('simulated herdr failure');
+            err.code = 'rpc_error';
+            throw err;
+          }
+          return { type: 'ok' };
+        }
+        return {};
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const srv = await startServer({
+      host: '127.0.0.1',
+      port: 0,
+      stateDir,
+      client: mockClient,
+    });
+    const base = `http://127.0.0.1:${srv.port}`;
+    try {
+      for (let i = 0; i < 30; i++) {
+        const st = await (await fetch(`${base}/herd/api/state`)).json();
+        if (st.panes?.some((p) => p.pane_id === 'w0:pFail')) break;
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      const fail = await postSend(base, 'w0:pFail', { text: 'will-fail' });
+      assert.equal(fail.res.status, 502);
+      // Immediate retry must not be rate-limited (reservation rolled back).
+      const retry = await postSend(base, 'w0:pFail', { text: 'retry-ok' });
+      assert.equal(retry.res.status, 200, JSON.stringify(retry.json));
+      assert.equal(retry.json.sent, true);
+    } finally {
+      await srv.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('PT2_READONLY send fuse', () => {
   it('returns 403 readonly and does not open allowWrite', async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-ro-'));
