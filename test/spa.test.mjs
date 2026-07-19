@@ -310,6 +310,36 @@ describe('spa static via bridge', () => {
     assert.match(html, /style\.css/);
   });
 
+  it('GET /herd/ composer is Telegram-style (field wrap, attach inside, icon send)', async () => {
+    const res = await fetch(`${base}/herd/`);
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    // Pill field wraps attach + textarea; attach is not a lone outlined sibling.
+    assert.match(html, /class="composer-field"/);
+    assert.match(html, /id="btn-attach"/);
+    assert.match(html, /id="attach-input"/);
+    assert.match(html, /id="attach-preview"/);
+    // Send is icon button (aria-label), not text pill 「发送」.
+    assert.match(html, /id="btn-send"[^>]*aria-label="发送"/);
+    assert.match(html, /class="send-icon"/);
+    assert.match(html, /class="attach-icon"/);
+    assert.doesNotMatch(html, /class="send-btn"[^>]*>\s*发送\s*</);
+    // Quick-keys still present above composer row.
+    assert.match(html, /class="hotkey-bar"/);
+    assert.match(html, /data-hotkey="esc"/);
+    assert.match(html, /data-hotkey="ctrl-c"/);
+    assert.match(html, /data-hotkey="enter"/);
+    // CSS still carries safe-area + circular send + docked attach.
+    const cssRes = await fetch(`${base}/herd/style.css`);
+    assert.equal(cssRes.status, 200);
+    const css = await cssRes.text();
+    assert.match(css, /safe-area-inset-bottom/);
+    assert.match(css, /\.send-btn[\s\S]*border-radius:\s*50%/);
+    assert.match(css, /\.composer-field[\s\S]*border-radius:\s*22px/);
+    assert.match(css, /\.attach-btn[\s\S]*border:\s*none/);
+    assert.match(css, /\.hotkey-bar[\s\S]*opacity:\s*0\.72/);
+  });
+
   it('static assets have correct Content-Type', async () => {
     const css = await fetch(`${base}/herd/style.css`);
     assert.equal(css.status, 200);

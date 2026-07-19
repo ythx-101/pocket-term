@@ -101,33 +101,68 @@
             aria-live="polite"
           ></div>
           <div class="composer-row">
+            <div class="composer-field">
+              <button
+                type="button"
+                id="btn-attach"
+                class="attach-btn"
+                aria-label="上传图片"
+                title="上传图片"
+              >
+                <svg
+                  class="attach-icon"
+                  viewBox="0 0 24 24"
+                  width="22"
+                  height="22"
+                  aria-hidden="true"
+                  focusable="false"
+                >
+                  <path
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"
+                  />
+                </svg>
+              </button>
+              <input
+                type="file"
+                id="attach-input"
+                class="sr-only"
+                accept="image/*"
+                tabindex="-1"
+                aria-hidden="true"
+              />
+              <textarea
+                id="composer-input"
+                class="composer-input"
+                rows="1"
+                placeholder="发给 agent…"
+                enterkeyhint="send"
+                autocomplete="off"
+                autocapitalize="sentences"
+              ></textarea>
+            </div>
             <button
               type="button"
-              id="btn-attach"
-              class="attach-btn"
-              aria-label="上传图片"
-              title="上传图片"
+              id="btn-send"
+              class="send-btn"
+              aria-label="发送"
+              title="发送"
             >
-              📎
+              <svg
+                class="send-icon"
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path fill="currentColor" d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z" />
+              </svg>
             </button>
-            <input
-              type="file"
-              id="attach-input"
-              class="sr-only"
-              accept="image/*"
-              tabindex="-1"
-              aria-hidden="true"
-            />
-            <textarea
-              id="composer-input"
-              class="composer-input"
-              rows="1"
-              placeholder="发给 agent…"
-              enterkeyhint="send"
-              autocomplete="off"
-              autocapitalize="sentences"
-            ></textarea>
-            <button type="button" id="btn-send" class="send-btn">发送</button>
           </div>
         </footer>
         <!-- Fullscreen image viewer (M2-P2) -->

@@ -778,51 +778,68 @@ body.image-viewer-open {
   z-index: 3;
 }
 
-/* —— composer (send) —— */
+/* —— composer (Telegram-style send bar, M2-P3) —— */
 .composer {
   flex-shrink: 0;
   z-index: 3;
   background: var(--bg-elev);
   border-top: 1px solid var(--border);
-  padding: 0.35rem 0.55rem 0.45rem;
-  padding-bottom: max(0.45rem, env(safe-area-inset-bottom, 0px));
+  padding: 0.3rem 0.55rem 0.4rem;
+  padding-bottom: max(0.4rem, env(safe-area-inset-bottom, 0px));
 }
+/* Quick-keys: lighter / smaller so the input row dominates */
 .hotkey-bar {
   display: flex;
-  gap: 0.35rem;
-  padding: 0.15rem 0.15rem 0.35rem;
+  gap: 0.3rem;
+  padding: 0.05rem 0.1rem 0.28rem;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  opacity: 0.72;
 }
 .hotkey-btn {
   appearance: none;
   flex-shrink: 0;
-  border: 1px solid var(--border);
-  background: var(--bg);
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
   color: var(--fg-muted);
   font: inherit;
-  font-size: var(--fs-sm);
+  font-size: calc(var(--fs-sm) * 0.9);
   border-radius: 999px;
-  min-height: 32px;
-  padding: 0 0.7rem;
+  min-height: 26px;
+  padding: 0 0.55rem;
   cursor: pointer;
+  opacity: 0.9;
 }
 .hotkey-btn:active {
-  opacity: 0.7;
+  opacity: 0.55;
 }
 .composer-row {
   display: flex;
   align-items: flex-end;
-  gap: 0.45rem;
+  gap: 0.4rem;
+}
+/* Pill field: paperclip docks inside left edge + textarea fills rest */
+.composer-field {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  background: var(--bg);
+  min-height: 44px;
+  padding: 0 0.45rem 0 0.1rem;
+}
+.composer-field:focus-within {
+  border-color: var(--accent);
 }
 .attach-btn {
   appearance: none;
   flex-shrink: 0;
-  border: 1px solid var(--border);
-  background: var(--bg);
-  color: var(--fg);
+  border: none;
+  background: transparent;
+  color: var(--fg-muted);
   font: inherit;
-  font-size: 1.15rem;
   line-height: 1;
   border-radius: 50%;
   width: 40px;
@@ -830,17 +847,24 @@ body.image-viewer-open {
   min-width: 40px;
   min-height: 40px;
   padding: 0;
+  margin: 0;
   cursor: pointer;
   display: grid;
   place-items: center;
+  align-self: center;
 }
 .attach-btn:active:not(:disabled) {
-  opacity: 0.75;
+  opacity: 0.65;
+  color: var(--fg);
 }
 .attach-btn:disabled,
 .attach-btn.uploading {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: not-allowed;
+}
+.attach-icon {
+  display: block;
+  pointer-events: none;
 }
 .sr-only {
   position: absolute;
@@ -855,41 +879,55 @@ body.image-viewer-open {
 }
 .composer-input {
   flex: 1;
+  min-width: 0;
   min-height: 40px;
   max-height: 120px;
   resize: none;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: var(--bg);
+  border: none;
+  border-radius: 0;
+  background: transparent;
   color: var(--fg);
   font: inherit;
-  padding: 0.55rem 0.85rem;
+  padding: 0.55rem 0.35rem 0.55rem 0;
   line-height: 1.35;
   outline: none;
 }
 .composer-input:focus {
-  border-color: var(--accent);
+  outline: none;
 }
+/* Circular send: accent fill + white paper-plane */
 .send-btn {
   appearance: none;
   flex-shrink: 0;
   border: none;
   background: var(--accent);
-  color: #1a1824;
+  color: #fff;
   font: inherit;
-  font-weight: 600;
-  border-radius: 18px;
-  min-width: 64px;
-  min-height: 40px;
-  padding: 0 0.85rem;
+  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 0;
   cursor: pointer;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 1px 4px var(--shadow);
+}
+.send-icon {
+  display: block;
+  pointer-events: none;
+  /* slight right bias so the plane feels aimed outward */
+  transform: translateX(1px);
 }
 .send-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+  box-shadow: none;
 }
 .send-btn:active:not(:disabled) {
-  opacity: 0.85;
+  opacity: 0.88;
+  transform: scale(0.96);
 }
 
 /* toast */
