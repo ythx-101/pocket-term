@@ -37,6 +37,7 @@ import {
   pendingNotifyCount,
   formatNotifyBadge,
   parseNotifyToggle,
+  purgeTierBStreamItems,
   vapidKeyToBytes,
   shouldRecoverLifecycle,
 } from './spa-utils.js';
@@ -1259,6 +1260,23 @@ function renderBubbles(paneId) {
   }
 }
 
+/**
+ * M4: B→A purge — drop Tier B stream cards for a pane; keep Tier A / user.
+ * @param {string} paneId
+ */
+function applyPurgeTierB(paneId) {
+  if (!paneId) return;
+  const bucket = bubbleStore.get(paneId);
+  if (!bucket) return;
+  const next = purgeTierBStreamItems(bucket.items);
+  if (next.length === bucket.items.length) return;
+  bucket.items = next;
+  bucket.ids = new Set(next.map((m) => String(m.id)));
+  if (paneId === activePaneId) {
+    renderBubbles(paneId);
+  }
+}
+
 function appendBubble(paneId, msg, { render = true } = {}) {
   const bucket = ensureBubbleBucket(paneId);
   const id = String(msg.id ?? `${msg.ts}:${msg.role}:${msg.text?.slice?.(0, 20)}`);
@@ -1542,6 +1560,17 @@ function connectSse() {
           if (parseRoute(location.hash).name === 'chats') renderChatList();
         }
       }
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // M4: server purged Tier B buffer on B→A — clear matching stream cards in DOM.
+  es.addEventListener('purge', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      const paneId = data?.pane_id;
+      if (paneId) applyPurgeTierB(paneId);
     } catch {
       /* ignore */
     }

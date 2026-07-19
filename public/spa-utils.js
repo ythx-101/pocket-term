@@ -686,13 +686,30 @@ export function reduceNotifications(prev, panes, enabled = {}, now = Date.now())
     pending = pending.filter((e) => e.paneId !== paneId).concat(ev);
   }
 
-  // Drop pending for panes that no longer exist (cannot be opened).
-  pending = pending.filter((e) => e.paneId in statuses);
+  // M5: drop pending when pane leaves blocked/done (e.g. done→working).
+  // Unread done that is *still* done is kept; only non-notify statuses clear.
+  // Also drop pending for panes that no longer exist (cannot be opened).
+  pending = pending.filter((e) => {
+    if (!(e.paneId in statuses)) return false;
+    const st = statuses[e.paneId];
+    return st === 'blocked' || st === 'done';
+  });
 
   return {
     state: { baselined: true, statuses, lastEmitted, pending },
     emitted,
   };
+}
+
+/**
+ * M4: drop Tier B stream cards from a client bubble list after a B→A purge.
+ * Keeps user / Tier A agent / system messages.
+ * @param {Array<object>|null|undefined} items
+ * @returns {Array<object>}
+ */
+export function purgeTierBStreamItems(items) {
+  if (!Array.isArray(items)) return [];
+  return items.filter((b) => b && b.stream !== true);
 }
 
 /**

@@ -154,6 +154,11 @@ function sendJson(res, status, body, extraHeaders = {}) {
     'Cache-Control': 'no-store',
     ...extraHeaders,
   });
+  // L7: HEAD must not include a body (Content-Length still describes GET size).
+  if (res.req?.method === 'HEAD') {
+    res.end();
+    return;
+  }
   res.end(data);
 }
 
