@@ -572,6 +572,184 @@ export function initialAttachPreview() {
   return { path: null };
 }
 
+// —— in-app notifications (M2.5) ——
+
+/** Statuses that produce an in-app notification when entered. */
+export const NOTIFY_STATUSES = ['blocked', 'done'];
+/** Suppress duplicate (pane,status) notifications inside this window. */
+export const NOTIFY_DEBOUNCE_MS = 60_000;
+
+/**
+ * @typedef {{ paneId: string, status: 'blocked'|'done', at: number }} NotifyEvent
+ * @typedef {{
+ *   baselined: boolean,
+ *   statuses: Record<string, string>,
+ *   lastEmitted: Record<string, number>,
+ *   pending: NotifyEvent[],
+ * }} NotifyState
+ */
+
+/**
+ * Fresh notification state; the first reduce establishes a baseline
+ * (records statuses without emitting) so initial/reconnect snapshots
+ * never replay pre-existing blocked/done panes.
+ * @returns {NotifyState}
+ */
+export function initialNotifyState() {
+  return { baselined: false, statuses: {}, lastEmitted: {}, pending: [] };
+}
+
+/** Debounce key per (pane,status); NUL never appears in pane ids. */
+function notifyKey(paneId, status) {
+  return `${paneId}\u0000${status}`;
+}
+
+/**
+ * Reduce one full pane snapshot into notification state.
+ * Detects only edges *into* blocked/done, honors independent enabled
+ * flags, applies the per-(pane,status) debounce with an injected clock,
+ * and never mutates `prev`.
+ *
+ * @param {NotifyState|null|undefined} prev
+ * @param {Pane[]|null|undefined} panes current snapshot
+ * @param {{ blocked?: boolean, done?: boolean }} [enabled] default both on
+ * @param {number} [now]
+ * @returns {{ state: NotifyState, emitted: NotifyEvent[] }}
+ */
+export function reduceNotifications(prev, panes, enabled = {}, now = Date.now()) {
+  const cur =
+    prev && typeof prev === 'object' && Array.isArray(prev.pending)
+      ? prev
+      : initialNotifyState();
+  const list = Array.isArray(panes) ? panes : [];
+
+  /** @type {Record<string, string>} */
+  const statuses = {};
+  for (const p of list) {
+    if (!p || p.pane_id == null || p.pane_id === '') continue;
+    statuses[String(p.pane_id)] = p.agent_status != null ? String(p.agent_status) : '';
+  }
+
+  if (!cur.baselined) {
+    return {
+      state: {
+        baselined: true,
+        statuses,
+        lastEmitted: { ...cur.lastEmitted },
+        pending: cur.pending.slice(),
+      },
+      emitted: [],
+    };
+  }
+
+  const isEnabled = (status) =>
+    status === 'blocked' ? enabled.blocked !== false : enabled.done !== false;
+  const t = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+  const lastEmitted = { ...cur.lastEmitted };
+  /** @type {NotifyEvent[]} */
+  const emitted = [];
+  let pending = cur.pending;
+
+  for (const [paneId, status] of Object.entries(statuses)) {
+    if (!NOTIFY_STATUSES.includes(status)) continue;
+    if (cur.statuses[paneId] === status) continue; // no edge
+    if (!isEnabled(status)) continue;
+    const key = notifyKey(paneId, status);
+    const lastAt = lastEmitted[key];
+    if (Number.isFinite(lastAt) && t - lastAt < NOTIFY_DEBOUNCE_MS) continue;
+    lastEmitted[key] = t;
+    const ev = { paneId, status: /** @type {'blocked'|'done'} */ (status), at: t };
+    emitted.push(ev);
+    // Latest event per pane wins; older pending for the pane is stale.
+    pending = pending.filter((e) => e.paneId !== paneId).concat(ev);
+  }
+
+  // Drop pending for panes that no longer exist (cannot be opened).
+  pending = pending.filter((e) => e.paneId in statuses);
+
+  return {
+    state: { baselined: true, statuses, lastEmitted, pending },
+    emitted,
+  };
+}
+
+/**
+ * Consume (clear) all pending notifications for an opened pane.
+ * @param {NotifyState|null|undefined} state
+ * @param {string|null|undefined} paneId
+ * @returns {{ state: NotifyState, consumed: NotifyEvent[] }}
+ */
+export function consumePaneNotifications(state, paneId) {
+  const cur =
+    state && typeof state === 'object' && Array.isArray(state.pending)
+      ? state
+      : initialNotifyState();
+  const id = paneId == null ? '' : String(paneId);
+  const consumed = cur.pending.filter((e) => e.paneId === id);
+  if (!consumed.length) return { state: cur, consumed: [] };
+  return {
+    state: { ...cur, pending: cur.pending.filter((e) => e.paneId !== id) },
+    consumed,
+  };
+}
+
+/**
+ * Total pending notifications (会话 tab badge count).
+ * @param {NotifyState|null|undefined} state
+ * @returns {number}
+ */
+export function pendingNotifyCount(state) {
+  return Array.isArray(state?.pending) ? state.pending.length : 0;
+}
+
+/**
+ * Newest pending notification (banner target), or null.
+ * @param {NotifyState|null|undefined} state
+ * @returns {NotifyEvent|null}
+ */
+export function latestPendingNotification(state) {
+  const p = state?.pending;
+  if (!Array.isArray(p) || !p.length) return null;
+  return p.reduce((a, b) => (b.at >= a.at ? b : a));
+}
+
+/**
+ * Badge text: '' hides, 1..99 numeric, 99+ capped.
+ * @param {number|null|undefined} count
+ * @returns {string}
+ */
+export function formatNotifyBadge(count) {
+  const n = Number(count);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return n > 99 ? '99+' : String(Math.floor(n));
+}
+
+/**
+ * Banner view-model for a pending notification.
+ * @param {NotifyEvent|null|undefined} event
+ * @param {Pane|null|undefined} pane snapshot for the pane, if still present
+ * @returns {{ text: string, href: string, status: 'blocked'|'done' }|null}
+ */
+export function notifyBannerView(event, pane) {
+  if (!event || !event.paneId) return null;
+  const title = paneTitle(pane || { pane_id: event.paneId });
+  const label = event.status === 'blocked' ? '等你回复' : '已完成';
+  return {
+    text: `${title} · ${label}`,
+    href: `#/chat/${encodeURIComponent(event.paneId)}`,
+    status: event.status === 'blocked' ? 'blocked' : 'done',
+  };
+}
+
+/**
+ * Parse a localStorage notification toggle; absent/other = enabled.
+ * @param {string|null|undefined} raw
+ * @returns {boolean}
+ */
+export function parseNotifyToggle(raw) {
+  return raw !== '0';
+}
+
 /** Collapse identical toast text within this window (ms). */
 export const TOAST_COLLAPSE_MS = 3000;
 /** Auto-dismiss toast after this many ms. */
