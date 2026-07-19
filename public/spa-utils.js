@@ -674,6 +674,23 @@ export function reduceNotifications(prev, panes, enabled = {}, now = Date.now())
 }
 
 /**
+ * Drop the baseline before a reconnect/refetch snapshot: the next reduce
+ * records statuses without emitting, so a status that changed while the
+ * connection was down is not replayed as an edge. Pending notifications
+ * and debounce history are preserved.
+ * @param {NotifyState|null|undefined} state
+ * @returns {NotifyState}
+ */
+export function rebaselineNotifyState(state) {
+  const cur =
+    state && typeof state === 'object' && Array.isArray(state.pending)
+      ? state
+      : initialNotifyState();
+  if (!cur.baselined) return cur;
+  return { ...cur, baselined: false };
+}
+
+/**
  * Consume (clear) all pending notifications for an opened pane.
  * @param {NotifyState|null|undefined} state
  * @param {string|null|undefined} paneId

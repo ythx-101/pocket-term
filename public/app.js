@@ -31,6 +31,7 @@ import {
   TOAST_DISMISS_MS,
   initialNotifyState,
   reduceNotifications,
+  rebaselineNotifyState,
   consumePaneNotifications,
   pendingNotifyCount,
   latestPendingNotification,
@@ -1379,6 +1380,8 @@ function stopSse() {
 
 function scheduleSseReconnect() {
   stopSse();
+  // Connection lost: first snapshot after reconnect is baseline-only.
+  notifyState = rebaselineNotifyState(notifyState);
   setConn('warn', '重连中');
   const delay = sseBackoffMs(sseAttempt);
   sseAttempt += 1;
@@ -1463,6 +1466,8 @@ function connectSse() {
 async function reconnectHard() {
   sseAttempt = 0;
   stopSse();
+  // Manual reconnect: treat the refetched snapshot as baseline-only too.
+  notifyState = rebaselineNotifyState(notifyState);
   setConn('warn', '重连中');
   try {
     const s = await fetchState();

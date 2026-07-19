@@ -11,7 +11,9 @@ import {
   NOTIFY_DEBOUNCE_MS,
   initialNotifyState,
   reduceNotifications,
+  rebaselineNotifyState,
   consumePaneNotifications,
+  refetchAfterSseReconnect,
   pendingNotifyCount,
   latestPendingNotification,
   formatNotifyBadge,
@@ -387,6 +389,151 @@ describe('notify: presentation helpers', () => {
   });
 });
 
+describe('notify: reconnect re-baseline (review fix)', () => {
+  // Live session: p1 working, p2 blocked (already notified + consumed).
+  function liveState() {
+    const base = reduceNotifications(
+      initialNotifyState(),
+      [pane('w9:p1', 'working'), pane('w9:p2', 'working')],
+      {},
+      T0
+    ).state;
+    const s = reduceNotifications(
+      base,
+      [pane('w9:p1', 'working'), pane('w9:p2', 'blocked')],
+      {},
+      T0 + 1000
+    );
+    assert.equal(s.emitted.length, 1);
+    return s.state;
+  }
+
+  it('rebaseline preserves statuses, pending, and debounce history', () => {
+    const live = liveState();
+    const re = rebaselineNotifyState(live);
+    assert.equal(re.baselined, false);
+    assert.deepEqual(re.statuses, live.statuses);
+    assert.deepEqual(re.pending, live.pending);
+    assert.deepEqual(re.lastEmitted, live.lastEmitted);
+    // Already-unbaselined or garbage input is an identity/fresh fallback.
+    assert.equal(rebaselineNotifyState(re), re);
+    assert.equal(rebaselineNotifyState(null).baselined, false);
+  });
+
+  it('status changed while disconnected does not emit in reconnect snapshot', () => {
+    const re = rebaselineNotifyState(liveState());
+    // p1 went working→blocked, p2 blocked→done while SSE was down.
+    const r = reduceNotifications(
+      re,
+      [pane('w9:p1', 'blocked'), pane('w9:p2', 'done')],
+      {},
+      T0 + 300_000
+    );
+    assert.deepEqual(r.emitted, []);
+    assert.equal(r.state.baselined, true);
+    assert.deepEqual(r.state.statuses, {
+      'w9:p1': 'blocked',
+      'w9:p2': 'done',
+    });
+    // Pending from before the disconnect survives the reconnect snapshot.
+    assert.deepEqual(r.state.pending, [
+      { paneId: 'w9:p2', status: 'blocked', at: T0 + 1000 },
+    ]);
+  });
+
+  it('live edges after the reconnect snapshot still emit', () => {
+    const re = rebaselineNotifyState(liveState());
+    const snap = reduceNotifications(
+      re,
+      [pane('w9:p1', 'blocked'), pane('w9:p2', 'working')],
+      {},
+      T0 + 300_000
+    ).state;
+    const back = reduceNotifications(
+      snap,
+      [pane('w9:p1', 'working'), pane('w9:p2', 'working')],
+      {},
+      T0 + 301_000
+    ).state;
+    const edge = reduceNotifications(
+      back,
+      [pane('w9:p1', 'blocked'), pane('w9:p2', 'done')],
+      {},
+      T0 + 400_000
+    );
+    assert.deepEqual(edge.emitted, [
+      { paneId: 'w9:p1', status: 'blocked', at: T0 + 400_000 },
+      { paneId: 'w9:p2', status: 'done', at: T0 + 400_000 },
+    ]);
+  });
+
+  it('debounce history survives rebaseline: quick re-edge stays suppressed', () => {
+    const live = liveState(); // p2 blocked emitted at T0+1000
+    const unblocked = reduceNotifications(
+      live,
+      [pane('w9:p1', 'working'), pane('w9:p2', 'working')],
+      {},
+      T0 + 2000
+    ).state;
+    const re = rebaselineNotifyState(unblocked);
+    const snap = reduceNotifications(
+      re,
+      [pane('w9:p1', 'working'), pane('w9:p2', 'working')],
+      {},
+      T0 + 3000
+    ).state;
+    // p2 blocked again inside the 60s window of its T0+1000 emission.
+    const quick = reduceNotifications(
+      snap,
+      [pane('w9:p1', 'working'), pane('w9:p2', 'blocked')],
+      {},
+      T0 + 1000 + NOTIFY_DEBOUNCE_MS - 1
+    );
+    assert.deepEqual(quick.emitted, []);
+  });
+
+  it('integration: refetch-after-reconnect flow applies snapshot baseline-only', async () => {
+    // Mirror app wiring: applyState runs the reducer; scheduleSseReconnect /
+    // reconnectHard rebaseline before the refetch lands.
+    let notifyState = reduceNotifications(
+      initialNotifyState(),
+      [pane('w9:p1', 'working')],
+      {},
+      T0
+    ).state;
+    const emittedLog = [];
+    const applyState = (next) => {
+      const r = reduceNotifications(
+        notifyState,
+        next.panes || [],
+        {},
+        next.__now
+      );
+      notifyState = r.state;
+      emittedLog.push(...r.emitted);
+    };
+
+    // SSE drops; pane becomes blocked while disconnected.
+    notifyState = rebaselineNotifyState(notifyState);
+    await refetchAfterSseReconnect({
+      fetchState: async () => ({
+        panes: [pane('w9:p1', 'blocked')],
+        __now: T0 + 120_000,
+      }),
+      applyState,
+      activePaneId: null,
+    });
+    assert.deepEqual(emittedLog, [], 'reconnect snapshot must not notify');
+
+    // Next live state event with a real edge still notifies.
+    applyState({ panes: [pane('w9:p1', 'working')], __now: T0 + 121_000 });
+    applyState({ panes: [pane('w9:p1', 'blocked')], __now: T0 + 200_000 });
+    assert.deepEqual(emittedLog, [
+      { paneId: 'w9:p1', status: 'blocked', at: T0 + 200_000 },
+    ]);
+  });
+});
+
 describe('notify: SPA wiring (static source)', () => {
   let html;
   let appJs;
@@ -424,6 +571,17 @@ describe('notify: SPA wiring (static source)', () => {
     assert.match(appJs, /#toggle-notify-done/);
     assert.match(appJs, /formatNotifyBadge/);
     assert.match(appJs, /notifyBannerView/);
+  });
+
+  it('app.js rebaselines notifications on both reconnect paths', () => {
+    assert.match(
+      appJs,
+      /function scheduleSseReconnect[\s\S]{0,200}rebaselineNotifyState\(/
+    );
+    assert.match(
+      appJs,
+      /async function reconnectHard[\s\S]{0,200}rebaselineNotifyState\(/
+    );
   });
 
   it('style.css styles banner variants, badge, and safe-area ownership', () => {
