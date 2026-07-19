@@ -266,8 +266,13 @@ function renderNotifyUI() {
   }
 }
 
+/** Generation counter so stale wallpaper probes cannot flip a newer setting. */
+let wallpaperProbeGen = 0;
+
 /**
  * Apply wallpaper + dim to #wallpaper / #dim / html class (live preview).
+ * Probes the image URL; on 404/error removes has-wallpaper so the dim scrim
+ * does not leave a pure dark screen (UX#5).
  * @param {{ wallpaper?: string|null, dim?: number }} s
  */
 function applyWallpaperVisual(s) {
@@ -289,31 +294,49 @@ function applyWallpaperVisual(s) {
 
   const layer = /** @type {HTMLElement|null} */ ($('#wallpaper'));
   const has = typeof wallpaper === 'string' && wallpaper.length > 0;
-  document.documentElement.classList.toggle('has-wallpaper', has);
-  if (layer) {
-    if (has) {
-      const url = wallpaperAssetUrl(BASE, wallpaper);
-      layer.style.backgroundImage = `url("${url}")`;
-    } else {
-      layer.style.backgroundImage = 'none';
-    }
-  }
+  const gen = ++wallpaperProbeGen;
 
-  // Card summary on 我 page
-  const sub = $('#wallpaper-card-sub');
-  if (sub) {
-    sub.textContent = has ? wallpaper : '无壁纸 · 主题底色';
-  }
-  const thumb = /** @type {HTMLElement|null} */ ($('#wallpaper-card-thumb'));
-  if (thumb) {
-    if (has) {
-      thumb.style.backgroundImage = `url("${wallpaperAssetUrl(BASE, wallpaper)}")`;
-      thumb.classList.add('has-image');
-    } else {
+  const clearWallpaperLayers = () => {
+    document.documentElement.classList.remove('has-wallpaper');
+    if (layer) layer.style.backgroundImage = 'none';
+    const thumb = /** @type {HTMLElement|null} */ ($('#wallpaper-card-thumb'));
+    if (thumb) {
       thumb.style.backgroundImage = '';
       thumb.classList.remove('has-image');
     }
+  };
+
+  if (!has) {
+    clearWallpaperLayers();
+    const sub = $('#wallpaper-card-sub');
+    if (sub) sub.textContent = '无壁纸 · 主题底色';
+    return;
   }
+
+  const url = wallpaperAssetUrl(BASE, wallpaper);
+  // Optimistic: show wallpaper; probe may clear on 404.
+  document.documentElement.classList.add('has-wallpaper');
+  if (layer) layer.style.backgroundImage = `url("${url}")`;
+
+  const sub = $('#wallpaper-card-sub');
+  if (sub) sub.textContent = wallpaper;
+  const thumb = /** @type {HTMLElement|null} */ ($('#wallpaper-card-thumb'));
+  if (thumb) {
+    thumb.style.backgroundImage = `url("${url}")`;
+    thumb.classList.add('has-image');
+  }
+
+  const probe = new Image();
+  probe.onload = () => {
+    /* keep has-wallpaper */
+  };
+  probe.onerror = () => {
+    if (gen !== wallpaperProbeGen) return;
+    clearWallpaperLayers();
+    if (sub) sub.textContent = '壁纸不可用 · 主题底色';
+    showToast('壁纸无法加载，已恢复纯色背景', 'warn');
+  };
+  probe.src = url;
 }
 
 function loadSettings() {
@@ -537,6 +560,8 @@ function renderAttachPreview() {
   if (!pathAbs) {
     strip.classList.add('hidden');
     strip.setAttribute('aria-hidden', 'true');
+    updateSendButtonState();
+    updateComposerStackOffset();
     return;
   }
   strip.classList.remove('hidden');
@@ -571,6 +596,8 @@ function renderAttachPreview() {
     el('div', { className: 'attach-preview-item' }, [thumb, removeBtn]),
     el('span', { className: 'attach-preview-hint', text: '配文可选，点发送发出' })
   );
+  updateSendButtonState();
+  updateComposerStackOffset();
 }
 
 /**
@@ -868,6 +895,8 @@ function updateComposerVisibility() {
   const composer = $('#composer');
   const roBar = $('#readonly-bar');
   if (composer) composer.classList.toggle('hidden', !show);
+  updateComposerStackOffset();
+  updateSendButtonState();
   if (roBar) {
     roBar.classList.toggle('hidden', show);
     if (state?.readonly) {
@@ -1030,14 +1059,46 @@ async function sendToActivePane(opts) {
     showToast('发送失败：网络错误', 'err');
   } finally {
     sending = false;
-    if (btn) btn.disabled = false;
+    updateSendButtonState();
   }
+}
+
+/**
+ * UX#6: disable send when input empty and no attach (uses .send-btn:disabled).
+ */
+function updateSendButtonState() {
+  const btn = /** @type {HTMLButtonElement|null} */ ($('#btn-send'));
+  if (!btn) return;
+  if (sending) {
+    btn.disabled = true;
+    return;
+  }
+  const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
+  const empty = !(input?.value || '').trim() && !attachPreview?.path;
+  btn.disabled = empty;
+}
+
+/**
+ * Measure composer stack so jump-bottom / toast clear multi-line input.
+ */
+function updateComposerStackOffset() {
+  const composer = $('#composer');
+  const root = document.documentElement;
+  if (!composer || composer.classList.contains('hidden')) {
+    root.style.setProperty('--composer-stack-h', '5.5rem');
+    return;
+  }
+  const h = composer.getBoundingClientRect().height;
+  // Small gap above the stack so the jump chip does not sit on the border.
+  root.style.setProperty('--composer-stack-h', `${Math.max(44, Math.ceil(h + 10))}px`);
 }
 
 function autoSizeComposer(input) {
   if (!input) return;
   input.style.height = 'auto';
   input.style.height = `${Math.min(120, Math.max(40, input.scrollHeight))}px`;
+  updateSendButtonState();
+  updateComposerStackOffset();
 }
 
 // —— list rendering ——
@@ -1237,24 +1298,35 @@ function renderBubbles(paneId) {
   if (!list) return;
   const bucket = ensureBubbleBucket(paneId);
   list.replaceChildren();
-  let lastChipTs = null;
-  for (const msg of bucket.items) {
-    const vm = mapBubbleToView(msg);
-    if (
-      vm.ts != null &&
-      (lastChipTs == null || vm.ts - lastChipTs >= TIME_CHIP_GAP_MS)
-    ) {
-      const chip = timeChipText(vm.ts);
-      if (chip) list.append(el('div', { className: 'time-chip', text: chip }));
-      lastChipTs = vm.ts;
+  if (!bucket.items.length) {
+    // UX#3: centered empty-state so chat is not a blank void above the composer
+    list.append(
+      el('div', {
+        className: 'bubble-empty',
+        text: '暂无消息',
+        role: 'status',
+      })
+    );
+  } else {
+    let lastChipTs = null;
+    for (const msg of bucket.items) {
+      const vm = mapBubbleToView(msg);
+      if (
+        vm.ts != null &&
+        (lastChipTs == null || vm.ts - lastChipTs >= TIME_CHIP_GAP_MS)
+      ) {
+        const chip = timeChipText(vm.ts);
+        if (chip) list.append(el('div', { className: 'time-chip', text: chip }));
+        lastChipTs = vm.ts;
+      }
+      const row = el('div', { className: `bubble-row ${vm.side}` });
+      const bubble = el('div', {
+        className: `bubble ${vm.variant}`,
+      });
+      fillBubbleContent(bubble, vm.text || ' ', { mono: vm.mono });
+      row.append(bubble);
+      list.append(row);
     }
-    const row = el('div', { className: `bubble-row ${vm.side}` });
-    const bubble = el('div', {
-      className: `bubble ${vm.variant}`,
-    });
-    fillBubbleContent(bubble, vm.text || ' ', { mono: vm.mono });
-    row.append(bubble);
-    list.append(row);
   }
   const load = $('#load-earlier');
   if (load) {
@@ -1755,7 +1827,7 @@ function wire() {
     }
   });
 
-  // Composer: tap send (do not hijack Enter — mobile IME safe)
+  // Composer: tap send only (Enter = newline; no empty keydown shell — P5)
   $('#btn-send')?.addEventListener('click', () => {
     const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
     const text = input?.value ?? '';
@@ -1767,14 +1839,8 @@ function wire() {
     $('#composer-input')
   );
   composerInput?.addEventListener('input', () => autoSizeComposer(composerInput));
-  // Prevent accidental form submit; Enter inserts newline (IME-safe).
-  composerInput?.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
-      // Mobile IME: do not steal Enter for send. Desktop: still newline unless
-      // user taps 发送. Spec: 点按发送, Enter 不抢.
-      /* leave default newline behavior for Shift+Enter; plain Enter also newline */
-    }
-  });
+  updateSendButtonState();
+  updateComposerStackOffset();
 
   $$('.hotkey-btn[data-hotkey]').forEach((b) => {
     b.addEventListener('click', () => {

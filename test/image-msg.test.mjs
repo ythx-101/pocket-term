@@ -5,7 +5,6 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseMessageImageSegments,
-  messageHasChatImage,
   composeImageSendText,
   reduceAttachPreview,
   initialAttachPreview,
@@ -17,7 +16,10 @@ describe('parseMessageImageSegments', () => {
   it('plain text stays one text segment', () => {
     const segs = parseMessageImageSegments('hello world');
     assert.deepEqual(segs, [{ type: 'text', text: 'hello world' }]);
-    assert.equal(messageHasChatImage('hello world'), false);
+    assert.equal(
+      segs.some((s) => s.type === 'image'),
+      false
+    );
   });
 
   it('parses bracket token alone', () => {
@@ -25,7 +27,10 @@ describe('parseMessageImageSegments', () => {
     const segs = parseMessageImageSegments(`[图片: ${p}]`);
     assert.equal(segs.length, 1);
     assert.deepEqual(segs[0], { type: 'image', path: p });
-    assert.equal(messageHasChatImage(`[图片: ${p}]`), true);
+    assert.equal(
+      segs.some((s) => s.type === 'image'),
+      true
+    );
   });
 
   it('parses bracket + CJK caption', () => {

@@ -25,7 +25,6 @@ import {
   agentAvatar,
   statusMeta,
   statusLabel,
-  statusDotClass,
   paneRowClass,
   paneTitle,
   groupContacts,
@@ -153,13 +152,13 @@ describe('spa pure: avatar / status / route / contacts', () => {
     assert.equal(statusLabel('other'), '未知');
   });
 
-  it('statusDotClass maps idle/working/blocked/done/unknown to color classes', () => {
-    assert.equal(statusDotClass('idle'), 'st-idle');
-    assert.equal(statusDotClass('working'), 'st-working');
-    assert.equal(statusDotClass('blocked'), 'st-blocked');
-    assert.equal(statusDotClass('done'), 'st-done');
-    assert.equal(statusDotClass(null), 'st-unknown');
-    assert.equal(statusDotClass('other'), 'st-unknown');
+  it('statusMeta.cls maps idle/working/blocked/done/unknown to color classes', () => {
+    assert.equal(statusMeta('idle').cls, 'st-idle');
+    assert.equal(statusMeta('working').cls, 'st-working');
+    assert.equal(statusMeta('blocked').cls, 'st-blocked');
+    assert.equal(statusMeta('done').cls, 'st-done');
+    assert.equal(statusMeta(null).cls, 'st-unknown');
+    assert.equal(statusMeta('other').cls, 'st-unknown');
     assert.equal(statusMeta('working').key, 'working');
     assert.equal(statusMeta('blocked').key, 'blocked');
   });

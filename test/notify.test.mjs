@@ -15,9 +15,7 @@ import {
   consumePaneNotifications,
   refetchAfterSseReconnect,
   pendingNotifyCount,
-  latestPendingNotification,
   formatNotifyBadge,
-  notifyBannerView,
   parseNotifyToggle,
 } from '../public/spa-utils.js';
 
@@ -328,7 +326,7 @@ describe('notify: pending list + consume', () => {
     ]);
   });
 
-  it('pendingNotifyCount / latestPendingNotification', () => {
+  it('pendingNotifyCount tracks pending length', () => {
     assert.equal(pendingNotifyCount(both), 2);
     assert.equal(pendingNotifyCount(initialNotifyState()), 0);
     assert.equal(pendingNotifyCount(null), 0);
@@ -338,13 +336,9 @@ describe('notify: pending list + consume', () => {
       {},
       T0 + 5000
     ).state;
-    assert.deepEqual(latestPendingNotification(later), {
-      paneId: 'w9:p3',
-      status: 'done',
-      at: T0 + 5000,
-    });
-    assert.equal(latestPendingNotification(initialNotifyState()), null);
-    assert.equal(latestPendingNotification(null), null);
+    // p2 left done→idle so its pending is dropped (M5); p3 new done + p1 still blocked
+    assert.equal(pendingNotifyCount(later), 2);
+    assert.ok(later.pending.some((e) => e.paneId === 'w9:p3' && e.status === 'done'));
   });
 });
 
@@ -356,23 +350,6 @@ describe('notify: presentation helpers', () => {
     assert.equal(formatNotifyBadge(1), '1');
     assert.equal(formatNotifyBadge(99), '99');
     assert.equal(formatNotifyBadge(120), '99+');
-  });
-
-  it('notifyBannerView builds text + chat href', () => {
-    const ev = { paneId: 'w9:p8', status: 'blocked', at: T0 };
-    const v = notifyBannerView(ev, {
-      pane_id: 'w9:p8',
-      agent: 'claude',
-      label: 'writer',
-    });
-    assert.equal(v.text, 'writer · 等你回复');
-    assert.equal(v.href, '#/chat/w9%3Ap8');
-    assert.equal(v.status, 'blocked');
-
-    const done = notifyBannerView({ paneId: 'w9:p9', status: 'done', at: T0 }, null);
-    assert.match(done.text, /已完成$/);
-    assert.equal(done.status, 'done');
-    assert.equal(notifyBannerView(null, null), null);
   });
 
   it('parseNotifyToggle defaults to enabled', () => {
@@ -576,6 +553,7 @@ describe('notify: SPA wiring (static source) — M2.6 no top banner', () => {
     assert.match(appJs, /paneRowClass/);
     assert.doesNotMatch(appJs, /banner-notify/);
     assert.doesNotMatch(appJs, /notifyBannerView/);
+    assert.doesNotMatch(appJs, /latestPendingNotification/);
   });
 
   it('app.js rebaselines notifications on both reconnect paths', () => {
@@ -610,7 +588,11 @@ describe('notify: SPA wiring (static source) — M2.6 no top banner', () => {
     assert.match(appJs, /row-status-label/);
     assert.match(appJs, /#blocked-bar/);
     assert.match(spaUtils, /export function paneRowClass/);
-    assert.match(spaUtils, /export function statusDotClass/);
+    assert.match(spaUtils, /export function statusLabel/);
+    assert.doesNotMatch(spaUtils, /export function statusDotClass/);
+    assert.doesNotMatch(spaUtils, /export function notifyBannerView/);
+    assert.doesNotMatch(spaUtils, /export function latestPendingNotification/);
+    assert.doesNotMatch(spaUtils, /export function messageHasChatImage/);
   });
 
   it('Web Push remains additive; sw.js untouched as orthogonal', async () => {

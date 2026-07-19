@@ -121,15 +121,6 @@ export function statusLabel(status) {
 }
 
 /**
- * Pure status → CSS color class for the avatar status-dot.
- * @param {string|null|undefined} status
- * @returns {string} e.g. 'st-working'
- */
-export function statusDotClass(status) {
-  return statusMeta(status).cls;
-}
-
-/**
  * CSS class list for a chat-list row (blocked left-edge pin marker).
  * @param {Pane|null|undefined} pane
  * @returns {string}
@@ -543,14 +534,6 @@ export function parseMessageImageSegments(text) {
 }
 
 /**
- * Whether message text contains at least one renderable chat image.
- * @param {string|null|undefined} text
- */
-export function messageHasChatImage(text) {
-  return parseMessageImageSegments(text).some((seg) => seg.type === 'image');
-}
-
-/**
  * Build send payload text from optional attach path + caption.
  * Agent-compatible form: `[图片: <path>] <caption>`.
  *
@@ -769,17 +752,6 @@ export function pendingNotifyCount(state) {
 }
 
 /**
- * Newest pending notification (banner target), or null.
- * @param {NotifyState|null|undefined} state
- * @returns {NotifyEvent|null}
- */
-export function latestPendingNotification(state) {
-  const p = state?.pending;
-  if (!Array.isArray(p) || !p.length) return null;
-  return p.reduce((a, b) => (b.at >= a.at ? b : a));
-}
-
-/**
  * Badge text: '' hides, 1..99 numeric, 99+ capped.
  * @param {number|null|undefined} count
  * @returns {string}
@@ -788,23 +760,6 @@ export function formatNotifyBadge(count) {
   const n = Number(count);
   if (!Number.isFinite(n) || n <= 0) return '';
   return n > 99 ? '99+' : String(Math.floor(n));
-}
-
-/**
- * Banner view-model for a pending notification.
- * @param {NotifyEvent|null|undefined} event
- * @param {Pane|null|undefined} pane snapshot for the pane, if still present
- * @returns {{ text: string, href: string, status: 'blocked'|'done' }|null}
- */
-export function notifyBannerView(event, pane) {
-  if (!event || !event.paneId) return null;
-  const title = paneTitle(pane || { pane_id: event.paneId });
-  const label = event.status === 'blocked' ? '等你回复' : '已完成';
-  return {
-    text: `${title} · ${label}`,
-    href: `#/chat/${encodeURIComponent(event.paneId)}`,
-    status: event.status === 'blocked' ? 'blocked' : 'done',
-  };
 }
 
 /**

@@ -17,15 +17,18 @@
   --danger: #eb6f92;
   --warn: #f6c177;
   --ok: #4cc38a;
-  --amber: #e8b45a;
-  --red: #e06c75;
-  --blue: #7eb8da;
-  --idle: #5c7387;
+  /* --amber/--red alias --warn/--danger (single source of truth) */
+  --amber: var(--warn);
+  --red: var(--danger);
+  /* done vs idle: blue brighter/cooler, idle neutral gray (12px dots distinguishable) */
+  --blue: #5eb8f0;
+  --idle: #6a7280;
   --unknown: #3a3a48;
-  --blocked-bg: rgba(246, 193, 119, 0.18);
+  --blocked-bg: color-mix(in srgb, var(--warn) 18%, transparent);
   --readonly-bg: #2a273f;
   --shadow: rgba(0, 0, 0, 0.35);
   --wallpaper-dim: 0.35;
+  --dim-rgb: 0, 0, 0;
   color-scheme: dark;
 }
 
@@ -45,14 +48,15 @@
   --danger: #b4637a;
   --warn: #ea9d34;
   --ok: #286983;
-  --amber: #c48c2a;
-  --red: #b4637a;
-  --blue: #56949f;
-  --idle: #9893a5;
+  --amber: var(--warn);
+  --red: var(--danger);
+  --blue: #2d7a9a;
+  --idle: #a8a29e;
   --unknown: #cecacd;
-  --blocked-bg: rgba(234, 157, 52, 0.15);
+  --blocked-bg: color-mix(in srgb, var(--warn) 15%, transparent);
   --readonly-bg: #fffaf3;
   --shadow: rgba(87, 82, 121, 0.12);
+  --dim-rgb: 250, 244, 237;
   color-scheme: light;
 }
 
@@ -102,7 +106,10 @@ body {
 
 #app {
   position: relative;
+  /* 100vh fallback for older WebViews, then 100dvh when supported */
+  height: 100vh;
   height: 100dvh;
+  max-height: 100vh;
   max-height: 100dvh;
   display: flex;
   flex-direction: column;
@@ -128,7 +135,8 @@ body {
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background: rgba(0, 0, 0, var(--wallpaper-dim, 0.35));
+  /* Theme-aware scrim: black in dark, paper-tint in light (not always black) */
+  background: rgba(var(--dim-rgb, 0, 0, 0), var(--wallpaper-dim, 0.35));
   opacity: 0; /* only visible once wallpaper image is set */
 }
 
@@ -283,12 +291,12 @@ html.has-wallpaper .topbar {
   box-shadow: 0 0 6px var(--ok);
 }
 .conn-led.warn::after {
-  background: var(--amber);
-  box-shadow: 0 0 6px var(--amber);
+  background: var(--warn);
+  box-shadow: 0 0 6px var(--warn);
 }
 .conn-led.err::after {
-  background: var(--red);
-  box-shadow: 0 0 6px var(--red);
+  background: var(--danger);
+  box-shadow: 0 0 6px var(--danger);
 }
 
 .banner {
@@ -346,11 +354,11 @@ html.has-wallpaper .topbar {
 }
 /* blocked: red left-edge bar (WeChat @ style) — pin via sort */
 .row.row-blocked {
-  box-shadow: inset 3px 0 0 0 var(--red);
-  background: color-mix(in srgb, var(--red) 6%, var(--bg));
+  box-shadow: inset 3px 0 0 0 var(--danger);
+  background: color-mix(in srgb, var(--danger) 6%, var(--bg));
 }
 .row.row-blocked:active {
-  background: color-mix(in srgb, var(--red) 10%, var(--bg-elev));
+  background: color-mix(in srgb, var(--danger) 10%, var(--bg-elev));
 }
 
 .row-avatar-col {
@@ -370,6 +378,10 @@ html.has-wallpaper .topbar {
   display: grid;
   place-items: center;
   color: #fff;
+  /* Shadow/stroke so letter stays readable on light agent colors (both themes) */
+  text-shadow:
+    0 0 2px rgba(0, 0, 0, 0.55),
+    0 1px 2px rgba(0, 0, 0, 0.4);
   font-weight: 700;
   font-size: 1.1rem;
   flex-shrink: 0;
@@ -525,16 +537,16 @@ html.has-wallpaper .topbar {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: var(--red);
+  background: var(--danger);
 }
 
-/* contacts */
+/* contacts — no bottom border (row inset divider is the single line; avoids double rule) */
 .group-head {
-  padding: 0.55rem 0.9rem 0.3rem;
+  padding: 0.65rem 0.9rem 0.25rem;
   font-size: var(--fs-sm);
   color: var(--fg-muted);
   background: var(--bg-elev);
-  border-bottom: 1px solid var(--divider);
+  border-bottom: none;
   font-weight: 600;
 }
 .group-sub {
@@ -571,8 +583,8 @@ html.has-wallpaper .topbar {
   font-size: var(--fs-sm);
   font-weight: 600;
   border-radius: 999px;
-  min-height: 36px;
-  padding: 0 0.85rem;
+  min-height: 44px;
+  padding: 0 1rem;
   cursor: pointer;
 }
 .blocked-confirm-btn:active {
@@ -717,11 +729,11 @@ html.has-wallpaper .topbar {
   font-size: var(--fs-sm);
 }
 
-/* Fullscreen image viewer */
+/* Fullscreen image viewer — above toast-host (z 40) so toasts never cover the image */
 .image-viewer {
   position: fixed;
   inset: 0;
-  z-index: 100;
+  z-index: 200;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -736,6 +748,9 @@ html.has-wallpaper .topbar {
 }
 body.image-viewer-open {
   overflow: hidden;
+}
+body.image-viewer-open .toast-host {
+  visibility: hidden;
 }
 .image-viewer-img {
   max-width: min(96vw, 100%);
@@ -811,7 +826,7 @@ body.image-viewer-open {
   height: 22px;
   border-radius: 50%;
   border: none;
-  background: #c44;
+  background: var(--danger);
   color: #fff;
   font-size: 0.9rem;
   line-height: 1;
@@ -833,7 +848,9 @@ body.image-viewer-open {
 .jump-bottom {
   position: absolute;
   right: 1rem;
-  bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+  /* Tracks composer stack height (set by JS --composer-stack-h) so multi-line
+     input does not cover the button — same approach as toast-host. */
+  bottom: calc(var(--composer-stack-h, 5.5rem) + env(safe-area-inset-bottom, 0px));
   z-index: 4;
   border: 1px solid var(--border);
   background: var(--bg-elev);
@@ -885,8 +902,8 @@ body.image-viewer-open {
   font: inherit;
   font-size: calc(var(--fs-sm) * 0.9);
   border-radius: 999px;
-  min-height: 26px;
-  padding: 0 0.55rem;
+  min-height: 44px;
+  padding: 0 0.75rem;
   cursor: pointer;
   opacity: 0.9;
 }
@@ -922,10 +939,10 @@ body.image-viewer-open {
   font: inherit;
   line-height: 1;
   border-radius: 50%;
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  min-height: 40px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
   padding: 0;
   margin: 0;
   cursor: pointer;
@@ -1010,11 +1027,11 @@ body.image-viewer-open {
   transform: scale(0.96);
 }
 
-/* toast */
+/* toast — below image-viewer (z 200); bottom offset tracks composer height */
 .toast-host {
   position: fixed;
   left: 50%;
-  bottom: calc(5.5rem + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--composer-stack-h, 5.5rem) + env(safe-area-inset-bottom, 0px));
   transform: translateX(-50%);
   z-index: 40;
   display: flex;
@@ -1025,7 +1042,7 @@ body.image-viewer-open {
   width: max-content;
 }
 body.chat-open .toast-host {
-  bottom: calc(7rem + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--composer-stack-h, 7rem) + env(safe-area-inset-bottom, 0px));
 }
 .toast {
   pointer-events: none;
@@ -1188,7 +1205,7 @@ body.chat-open .toast-host {
   font-size: var(--fs-sm);
   font-weight: 600;
   border-radius: 999px;
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 0.9rem;
   cursor: pointer;
 }
@@ -1316,7 +1333,7 @@ body.chat-open .toast-host {
   border-radius: 10px;
   background: var(--bg);
   color: var(--fg);
-  min-height: 42px;
+  min-height: 44px;
   padding: 0.55rem 0.75rem;
   font: inherit;
   font-weight: 600;
@@ -1403,6 +1420,19 @@ body.chat-open .toast-host {
   text-align: center;
   color: var(--fg-muted);
   font-size: var(--fs-sm);
+}
+/* Empty chat bubble area placeholder (UX#3) */
+.bubble-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40vh;
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: var(--fs-sm);
+  user-select: none;
+  pointer-events: none;
 }
 .empty.loading::before {
   content: '';
