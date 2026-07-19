@@ -213,6 +213,14 @@ export async function startServer(options = {}) {
     }
 
     // --- static under /herd ---
+    // Exact /herd (no trailing slash) would make relative assets like ./style.css
+    // resolve to /style.css outside our route. Redirect so the browser stays under /herd/.
+    if ((method === 'GET' || method === 'HEAD') && pathname === '/herd') {
+      res.writeHead(301, { Location: '/herd/' + (url.search || '') });
+      res.end();
+      return;
+    }
+
     if (method === 'GET' || method === 'HEAD') {
       // Prefer rawPath for traversal detection (URL parser collapses /herd/../…)
       const checkPath = rawPath.includes('..') ? rawPath : pathname;

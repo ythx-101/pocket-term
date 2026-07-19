@@ -153,6 +153,19 @@ describe('bridge messages + seen', () => {
 });
 
 describe('bridge static safety', () => {
+  it('redirects /herd to /herd/ so relative assets resolve', async () => {
+    const res = await fetch(`${base}/herd`, { redirect: 'manual' });
+    assert.equal(res.status, 301);
+    assert.equal(res.headers.get('location'), '/herd/');
+
+    const withQuery = await fetch(`${base}/herd?x=1`, { redirect: 'manual' });
+    assert.equal(withQuery.status, 301);
+    assert.equal(withQuery.headers.get('location'), '/herd/?x=1');
+
+    const slash = await fetch(`${base}/herd/`);
+    assert.equal(slash.status, 200);
+  });
+
   it('serves placeholder index at /herd/', async () => {
     const res = await fetch(`${base}/herd/`);
     assert.equal(res.status, 200);
