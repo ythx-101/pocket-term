@@ -120,14 +120,14 @@ herdr integration uninstall claude   # or project-documented reverse
 ## D. Security notes
 
 - Bridge must not listen on `0.0.0.0` in production.
-- herdr write surface is limited to `pane.send_text` / `pane.run` (client maps `pane.run` → send_text+Enter). Other write methods stay off the whitelist.
+- herdr write surface is limited to `pane.send_text` / `pane.send_keys` (keys hard-forced to `['enter']` only). `pane.run` is CLI sugar, not a socket method. Other write methods stay off the whitelist.
 - `POST /herd/api/pane/:id/send` is same-origin only (missing Origin/Referer rejected), body ≤8KB, 2s per-pane rate limit, pane must exist in the current snapshot.
 - Transcript paths are constrained under the configured Claude projects root; `..` segments rejected.
 - Static files under `/herd/` are realpath-checked to stay inside `public/`.
 
 ## E. PT2_READONLY fuse (M1 write channel rollback)
 
-M1 opens a directed send channel (`POST /herd/api/pane/:id/send` → herdr `pane.send_text` / `pane.run`). To instantly return to M0 read-only behavior without a code revert:
+M1 opens a directed send channel (`POST /herd/api/pane/:id/send` → herdr `pane.send_text` + `pane.send_keys` Enter). To instantly return to M0 read-only behavior without a code revert:
 
 ```bash
 # systemd drop-in or unit Environment=
@@ -140,7 +140,7 @@ systemctl restart pocket-term-2   # only after human approval to restart
 Effects when `PT2_READONLY=1` (or `true`):
 
 - Send endpoint responds `403 {"error":"readonly"}` before any herdr write.
-- Bridge constructs `createClient({ allowWrite: false })` — same whitelist as M0; `pane.send_text` / `pane.run` never reach the socket.
+- Bridge constructs `createClient({ allowWrite: false })` — same whitelist as M0; `pane.send_text` / `pane.send_keys` never reach the socket.
 - Read APIs (`/state`, `/events`, `/messages`, static SPA) keep working.
 
 Disable the fuse (re-enable send after review):

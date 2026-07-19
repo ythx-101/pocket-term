@@ -14,7 +14,10 @@ import {
   READ_ONLY_METHODS,
   WRITE_METHODS,
   mapWriteMethod,
+  errorFromRpcPayload,
+  ALLOWED_SEND_KEYS,
   DEFAULT_SOCKET_PATH,
+  HerdrError,
 } from '../lib/herdr-client.js';
 
 const client = createClient({ socketPath: DEFAULT_SOCKET_PATH });
@@ -61,11 +64,12 @@ describe('herdr-client read-only rpc', () => {
 });
 
 describe('herdr-client write whitelist', () => {
-  it('WRITE_METHODS is pane.send_text + pane.run', () => {
-    assert.deepEqual([...WRITE_METHODS], ['pane.send_text', 'pane.run']);
+  it('WRITE_METHODS is pane.send_text + pane.send_keys', () => {
+    assert.deepEqual([...WRITE_METHODS], ['pane.send_text', 'pane.send_keys']);
+    assert.deepEqual([...ALLOWED_SEND_KEYS], ['enter']);
   });
 
-  it('default client rejects pane.send_text (M0 behavior)', async () => {
+  it('default client rejects write methods (M0 behavior)', async () => {
     const ro = createClient({ socketPath: DEFAULT_SOCKET_PATH });
     assert.equal(ro.allowWrite, false);
     await assert.rejects(
@@ -73,19 +77,32 @@ describe('herdr-client write whitelist', () => {
       (err) => err && err.code === 'method_not_allowed'
     );
     await assert.rejects(
+      () =>
+        ro.rpc('pane.send_keys', { pane_id: 'w9:p8', keys: ['enter'] }),
+      (err) => err && err.code === 'method_not_allowed'
+    );
+    // pane.run is not on the whitelist at all (CLI sugar only).
+    await assert.rejects(
       () => ro.rpc('pane.run', { pane_id: 'w9:p8', text: 'nope' }),
       (err) => err && err.code === 'method_not_allowed'
     );
   });
 
-  it('mapWriteMethod maps pane.run → send_text + newline', () => {
-    const mapped = mapWriteMethod('pane.run', {
+  it('mapWriteMethod forces pane.send_keys keys to [enter]', () => {
+    const mapped = mapWriteMethod('pane.send_keys', {
       pane_id: 'x',
-      text: 'echo hi',
+      keys: ['ctrl-c', 'a', 'escape'],
     });
-    assert.equal(mapped.method, 'pane.send_text');
-    assert.equal(mapped.params.text, 'echo hi\n');
+    assert.equal(mapped.method, 'pane.send_keys');
+    assert.deepEqual(mapped.params.keys, ['enter']);
     assert.equal(mapped.params.pane_id, 'x');
+
+    const passthrough = mapWriteMethod('pane.send_text', {
+      pane_id: 'x',
+      text: 'hi',
+    });
+    assert.equal(passthrough.method, 'pane.send_text');
+    assert.equal(passthrough.params.text, 'hi');
   });
 
   it('allowWrite: pane.send_text reaches mock socket as wire method', async () => {
@@ -137,9 +154,13 @@ describe('herdr-client write whitelist', () => {
       assert.equal(received.method, 'pane.send_text');
       assert.equal(received.params.pane_id, 'scratch:test');
       assert.equal(received.params.text, 'echo mock');
-      // still rejects non-whitelisted writes
+      // still rejects non-whitelisted writes (incl. pane.run)
       await assert.rejects(
         () => w.rpc('pane.close', { pane_id: 'scratch:test' }),
+        (err) => err && err.code === 'method_not_allowed'
+      );
+      await assert.rejects(
+        () => w.rpc('pane.run', { pane_id: 'scratch:test', text: 'x' }),
         (err) => err && err.code === 'method_not_allowed'
       );
     } finally {
@@ -152,10 +173,10 @@ describe('herdr-client write whitelist', () => {
     }
   });
 
-  it('allowWrite: pane.run maps to pane.send_text on the wire', async () => {
+  it('allowWrite: pane.send_keys always wires keys:[enter]', async () => {
     const sockPath = path.join(
       os.tmpdir(),
-      `pt2-mock-run-${process.pid}-${Date.now()}.sock`
+      `pt2-mock-keys-${process.pid}-${Date.now()}.sock`
     );
     try {
       await fs.promises.unlink(sockPath);
@@ -186,9 +207,13 @@ describe('herdr-client write whitelist', () => {
 
     try {
       const w = createClient({ socketPath: sockPath, allowWrite: true });
-      await w.rpc('pane.run', { pane_id: 'scratch:test', text: 'echo run' });
-      assert.equal(received.method, 'pane.send_text');
-      assert.equal(received.params.text, 'echo run\n');
+      await w.rpc('pane.send_keys', {
+        pane_id: 'scratch:test',
+        keys: ['ctrl-c', 'escape'],
+      });
+      assert.equal(received.method, 'pane.send_keys');
+      assert.deepEqual(received.params.keys, ['enter']);
+      assert.equal(received.params.pane_id, 'scratch:test');
     } finally {
       await new Promise((resolve) => server.close(() => resolve()));
       try {
@@ -197,6 +222,196 @@ describe('herdr-client write whitelist', () => {
         /* ignore */
       }
     }
+  });
+});
+
+describe('rpc error propagation (must not swallow {error})', () => {
+  it('errorFromRpcPayload maps code/message', () => {
+    const err = errorFromRpcPayload({
+      code: 'invalid_request',
+      message: "unknown variant `pane.run`",
+    });
+    assert.ok(err instanceof HerdrError);
+    assert.equal(err.code, 'invalid_request');
+    assert.match(err.message, /pane\.run/);
+  });
+
+  it('rpc rejects when server replies {id:"", error:...} (herdr shape)', async () => {
+    const sockPath = path.join(
+      os.tmpdir(),
+      `pt2-err-empty-id-${process.pid}-${Date.now()}.sock`
+    );
+    try {
+      await fs.promises.unlink(sockPath);
+    } catch {
+      /* ignore */
+    }
+
+    const server = net.createServer((socket) => {
+      let buf = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk) => {
+        buf += chunk;
+        if (!buf.includes('\n')) return;
+        // Real herdr shape for unknown method: empty id + error object.
+        socket.write(
+          JSON.stringify({
+            id: '',
+            error: {
+              code: 'invalid_request',
+              message:
+                'invalid request: unknown variant `pane.run`, expected one of ...',
+            },
+          }) + '\n'
+        );
+      });
+    });
+
+    await new Promise((resolve, reject) => {
+      server.listen(sockPath, () => resolve());
+      server.once('error', reject);
+    });
+
+    try {
+      const w = createClient({
+        socketPath: sockPath,
+        allowWrite: true,
+        timeoutMs: 2000,
+      });
+      // send_text is whitelisted; mock always returns the empty-id error.
+      await assert.rejects(
+        () =>
+          w.rpc('pane.send_text', {
+            pane_id: 'scratch:test',
+            text: 'should fail',
+          }),
+        (err) =>
+          err instanceof HerdrError &&
+          err.code === 'invalid_request' &&
+          /unknown variant|pane\.run/i.test(err.message)
+      );
+    } finally {
+      await new Promise((resolve) => server.close(() => resolve()));
+      try {
+        await fs.promises.unlink(sockPath);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+
+  it('rpc rejects error even when id mismatches request id', async () => {
+    const sockPath = path.join(
+      os.tmpdir(),
+      `pt2-err-mismatch-${process.pid}-${Date.now()}.sock`
+    );
+    try {
+      await fs.promises.unlink(sockPath);
+    } catch {
+      /* ignore */
+    }
+
+    const server = net.createServer((socket) => {
+      let buf = '';
+      socket.setEncoding('utf8');
+      socket.on('data', (chunk) => {
+        buf += chunk;
+        if (!buf.includes('\n')) return;
+        socket.write(
+          JSON.stringify({
+            id: 'not-the-request-id',
+            error: { code: 'rpc_error', message: 'boom mismatched id' },
+          }) + '\n'
+        );
+      });
+    });
+
+    await new Promise((resolve, reject) => {
+      server.listen(sockPath, () => resolve());
+      server.once('error', reject);
+    });
+
+    try {
+      const w = createClient({
+        socketPath: sockPath,
+        allowWrite: true,
+        timeoutMs: 2000,
+      });
+      await assert.rejects(
+        () =>
+          w.rpc('pane.send_text', { pane_id: 'x', text: 'y' }),
+        (err) =>
+          err instanceof HerdrError &&
+          err.code === 'rpc_error' &&
+          /mismatched id/.test(err.message)
+      );
+    } finally {
+      await new Promise((resolve) => server.close(() => resolve()));
+      try {
+        await fs.promises.unlink(sockPath);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
+});
+
+describe('real-socket: pane.run is unknown (regression guard)', () => {
+  it('raw socket pane.run → invalid_request unknown variant', async () => {
+    // Bypass client whitelist: herdr has no pane.run on the wire (CLI sugar).
+    // Regression guard so we never reintroduce mapping that pretends it exists.
+    const raw = await new Promise((resolve, reject) => {
+      const socket = net.createConnection(DEFAULT_SOCKET_PATH);
+      let buf = '';
+      const timer = setTimeout(() => {
+        socket.destroy();
+        reject(new Error('timeout waiting for pane.run error'));
+      }, 5000);
+      socket.setEncoding('utf8');
+      socket.on('connect', () => {
+        socket.write(
+          JSON.stringify({
+            id: 'reg-pane-run',
+            method: 'pane.run',
+            params: { pane_id: 'w9:p8', text: 'should-not-work' },
+          }) + '\n'
+        );
+      });
+      socket.on('data', (chunk) => {
+        buf += chunk;
+        const nl = buf.indexOf('\n');
+        if (nl === -1) return;
+        clearTimeout(timer);
+        const line = buf.slice(0, nl);
+        socket.destroy();
+        try {
+          resolve(JSON.parse(line));
+        } catch (err) {
+          reject(err);
+        }
+      });
+      socket.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
+
+    assert.ok(raw.error, `expected error payload, got ${JSON.stringify(raw)}`);
+    assert.equal(raw.id, '', 'herdr unknown-method errors use empty id');
+    assert.equal(raw.error.code, 'invalid_request');
+    assert.match(
+      String(raw.error.message),
+      /unknown variant\s*`?pane\.run`?/i
+    );
+    // Client whitelist must also reject pane.run (never reach socket via rpc).
+    const w = createClient({
+      socketPath: DEFAULT_SOCKET_PATH,
+      allowWrite: true,
+    });
+    await assert.rejects(
+      () => w.rpc('pane.run', { pane_id: 'w9:p8', text: 'x' }),
+      (err) => err && err.code === 'method_not_allowed'
+    );
   });
 });
 

@@ -167,7 +167,7 @@ describe('isDuplicateUserMessage (Tier A optimistic dedupe)', () => {
 });
 
 describe('sendToPane mode run two-step (paste-detection fix)', () => {
-  /** CJK fixture — single-write pane.run was swallowed by Claude Code paste detection. */
+  /** CJK fixture — single-write text+Enter was swallowed by Claude Code paste detection. */
   const CJK_TEXT = '你好，请用中文回答这个问题。';
 
   /**
@@ -183,7 +183,7 @@ describe('sendToPane mode run two-step (paste-detection fix)', () => {
         if (overrides.rpc) {
           return overrides.rpc(method, params, calls);
         }
-        if (method === 'pane.send_text' || method === 'pane.run') {
+        if (method === 'pane.send_text' || method === 'pane.send_keys') {
           calls.push({ method, params: { ...params } });
           return { type: 'ok' };
         }
@@ -205,7 +205,7 @@ describe('sendToPane mode run two-step (paste-detection fix)', () => {
     return { mgr, calls, stateDir };
   }
 
-  it('non-empty run: send_text → delay → empty pane.run (CJK fixture, fake timer)', async () => {
+  it('non-empty run: send_text → delay → send_keys enter (CJK fixture, fake timer)', async () => {
     mock.timers.enable({ apis: ['setTimeout'], now: 0 });
     const { mgr, calls, stateDir } = await makeManager();
     try {
@@ -229,9 +229,9 @@ describe('sendToPane mode run two-step (paste-detection fix)', () => {
       assert.equal(result.sent, true);
 
       assert.equal(calls.length, 2);
-      assert.equal(calls[1].method, 'pane.run');
+      assert.equal(calls[1].method, 'pane.send_keys');
       assert.equal(calls[1].params.pane_id, 'w0:pTwo');
-      assert.equal(calls[1].params.text, '', 'bare Enter only');
+      assert.deepEqual(calls[1].params.keys, ['enter'], 'bare Enter only');
     } finally {
       mock.timers.reset();
       await mgr.stop();
@@ -239,13 +239,16 @@ describe('sendToPane mode run two-step (paste-detection fix)', () => {
     }
   });
 
-  it('empty run stays single pure-Enter pane.run (confirm button path)', async () => {
+  it('empty run is single pure-Enter pane.send_keys (confirm button path)', async () => {
     const { mgr, calls, stateDir } = await makeManager();
     try {
       const result = await mgr.sendToPane('w0:pTwo', '', 'run');
       assert.equal(result.ok, true);
       assert.deepEqual(calls, [
-        { method: 'pane.run', params: { pane_id: 'w0:pTwo', text: '' } },
+        {
+          method: 'pane.send_keys',
+          params: { pane_id: 'w0:pTwo', keys: ['enter'] },
+        },
       ]);
     } finally {
       await mgr.stop();
@@ -355,7 +358,7 @@ describe('POST /herd/api/pane/:id/send guards', () => {
           err.code = 'timeout';
           throw err;
         }
-        if (method === 'pane.send_text' || method === 'pane.run') {
+        if (method === 'pane.send_text' || method === 'pane.send_keys') {
           return { type: 'ok' };
         }
         const err = new Error(`unexpected ${method}`);
@@ -480,7 +483,7 @@ describe('atomic rate-limit reservation (concurrent sends)', () => {
           err.code = 'timeout';
           throw err;
         }
-        if (method === 'pane.send_text' || method === 'pane.run') {
+        if (method === 'pane.send_text' || method === 'pane.send_keys') {
           sendCalls += 1;
           inFlight += 1;
           maxInFlight = Math.max(maxInFlight, inFlight);
@@ -572,7 +575,7 @@ describe('atomic rate-limit reservation (concurrent sends)', () => {
           err.code = 'timeout';
           throw err;
         }
-        if (method === 'pane.send_text' || method === 'pane.run') {
+        if (method === 'pane.send_text' || method === 'pane.send_keys') {
           if (failNext) {
             failNext = false;
             const err = new Error('simulated herdr failure');
@@ -651,7 +654,7 @@ describe('PT2_READONLY send fuse', () => {
           err.code = 'timeout';
           throw err;
         }
-        if (method === 'pane.send_text' || method === 'pane.run') {
+        if (method === 'pane.send_text' || method === 'pane.send_keys') {
           throw new Error('must not send in readonly');
         }
         return {};
@@ -877,4 +880,205 @@ describe('live send to self-owned scratch pane', () => {
       'messages should include optimistic user bubble'
     );
   });
+});
+
+/**
+ * REAL end-to-end: bridge HTTP → send_text + send_keys Enter → scratch claude replies.
+ * Creates and closes its own claude pane; never targets other agents.
+ *
+ * Prompt spells "P O N G" so contiguous PONG only appears in the agent reply.
+ */
+describe('live bridge HTTP → scratch claude CJK → PONG', () => {
+  /** @type {string|null} */
+  let scratchId = null;
+  /** @type {Awaited<ReturnType<typeof startServer>>|null} */
+  let srv = null;
+  let stateDir = null;
+  let base = null;
+  /** @type {ReturnType<typeof createClient>|null} */
+  let writeClient = null;
+  const cwd = path.join(os.tmpdir(), `pt2-claude-pong-${process.pid}`);
+
+  /**
+   * @param {string} paneId
+   * @param {string} [source]
+   */
+  async function readPaneText(paneId, source = 'visible') {
+    const ro = createClient({ socketPath: DEFAULT_SOCKET_PATH });
+    const read = await ro.rpc('pane.read', {
+      pane_id: paneId,
+      source,
+      lines: 80,
+    });
+    return String(read?.read?.text ?? read?.text ?? '');
+  }
+
+  before(async () => {
+    await fs.mkdir(cwd, { recursive: true });
+
+    const split = await herdrJson(
+      'pane',
+      'split',
+      '--pane',
+      MY_PANE,
+      '--direction',
+      'down',
+      '--no-focus',
+      '--ratio',
+      '0.18',
+      '--cwd',
+      cwd
+    );
+    scratchId = split?.result?.pane?.pane_id;
+    assert.ok(
+      scratchId,
+      `expected scratch pane id from split: ${JSON.stringify(split)}`
+    );
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Launch interactive claude (not --bare: bare skips keychain/OAuth).
+    writeClient = createClient({
+      socketPath: DEFAULT_SOCKET_PATH,
+      allowWrite: true,
+    });
+    await writeClient.rpc('pane.send_text', {
+      pane_id: scratchId,
+      text: 'claude',
+    });
+    await new Promise((r) => setTimeout(r, RUN_ENTER_DELAY_MS));
+    await writeClient.rpc('pane.send_keys', {
+      pane_id: scratchId,
+      keys: ['enter'],
+    });
+
+    // Trust dialog + wait until claude prompt is idle/ready.
+    let ready = false;
+    for (let i = 0; i < 80; i++) {
+      const text = await readPaneText(scratchId, 'visible');
+      if (/I trust this folder/i.test(text)) {
+        await writeClient.rpc('pane.send_keys', {
+          pane_id: scratchId,
+          keys: ['enter'],
+        });
+        await new Promise((r) => setTimeout(r, 800));
+        continue;
+      }
+      if (/Login expired|Please run \/login/i.test(text)) {
+        throw new Error(
+          `scratch claude login expired; cannot run PONG e2e. last=${text.slice(-300)}`
+        );
+      }
+      if (
+        /auto mode|for shortcuts|Try "|How can I help/i.test(text) &&
+        !/I trust this folder/i.test(text)
+      ) {
+        ready = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 400));
+    }
+    assert.ok(ready, 'scratch claude never became ready');
+
+    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-claude-bridge-'));
+    srv = await startServer({
+      host: '127.0.0.1',
+      port: 0,
+      stateDir,
+      client: writeClient,
+    });
+    base = `http://127.0.0.1:${srv.port}`;
+
+    // Ensure scratch is in bridge snapshot
+    for (let i = 0; i < 40; i++) {
+      if (srv.manager.paneExists(scratchId)) break;
+      const snapRes = await writeClient.rpc('session.snapshot');
+      const snap = snapRes?.snapshot ?? snapRes;
+      srv.manager._internal.setSnapshot(snap);
+      if (srv.manager.paneExists(scratchId)) break;
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    assert.ok(
+      srv.manager.paneExists(scratchId),
+      `scratch ${scratchId} must be in bridge snapshot`
+    );
+  });
+
+  after(async () => {
+    if (srv) {
+      try {
+        await srv.close();
+      } catch {
+        /* ignore */
+      }
+    }
+    if (stateDir) {
+      try {
+        await fs.rm(stateDir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
+    }
+    if (scratchId) {
+      try {
+        await herdrJson('pane', 'close', scratchId);
+      } catch {
+        /* best-effort */
+      }
+      scratchId = null;
+    }
+    try {
+      await fs.rm(cwd, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  });
+
+  it(
+    'POST CJK via bridge → claude replies PONG in pane.read',
+    { timeout: 180_000 },
+    async () => {
+      assert.ok(scratchId && srv && base);
+
+      // Contiguous "PONG" is only in the expected reply — prompt spells letters.
+      const cjkPrompt =
+        '你好。请把 P O N G 四个字母按顺序连成一个单词并只回复该单词（不要连字符、不要解释）。';
+      assert.ok(
+        !cjkPrompt.includes('PONG'),
+        'prompt must not contain contiguous PONG'
+      );
+
+      const { res, json } = await postSend(base, scratchId, {
+        text: cjkPrompt,
+        mode: 'run',
+      });
+      assert.equal(res.status, 200, JSON.stringify(json));
+      assert.equal(json.sent, true);
+
+      let lastText = '';
+      let sawPong = false;
+      const deadline = Date.now() + 120_000;
+      while (Date.now() < deadline) {
+        for (const source of ['visible', 'detection', 'recent']) {
+          lastText = await readPaneText(scratchId, source);
+          if (/\bPONG\b/.test(lastText)) {
+            sawPong = true;
+            break;
+          }
+        }
+        if (sawPong) break;
+        if (/Login expired|Please run \/login/i.test(lastText)) {
+          assert.fail(
+            `claude login expired mid-test; last=${lastText.slice(-400)}`
+          );
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+      assert.ok(
+        sawPong,
+        `expected PONG reply from scratch claude; last=${JSON.stringify(lastText).slice(0, 500)}`
+      );
+      // Received CJK on the agent UI (typed input path).
+      assert.match(lastText, /你好|四个字母/);
+    }
+  );
 });
