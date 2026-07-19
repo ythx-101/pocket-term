@@ -1271,6 +1271,41 @@ export async function startServer(options = {}) {
       return;
     }
 
+    // H2: Me-page blocked/done toggles sync to stored push prefs (same-origin).
+    if (pathname === '/herd/api/push/prefs' && method === 'POST') {
+      if (!isSameOriginWrite(req)) {
+        sendJson(res, 403, { error: 'cross_origin' });
+        return;
+      }
+      const body = await readBodyLimited(req, PUSH_BODY_MAX_BYTES);
+      if (!body.ok) {
+        sendJson(res, body.status, { error: body.error });
+        return;
+      }
+      let payload;
+      try {
+        payload = body.raw ? JSON.parse(body.raw) : {};
+      } catch {
+        sendJson(res, 400, { error: 'invalid_json' });
+        return;
+      }
+      if (typeof pushService.updatePrefs !== 'function') {
+        sendJson(res, 503, { error: 'push_not_configured' });
+        return;
+      }
+      const prefs =
+        payload?.prefs && typeof payload.prefs === 'object'
+          ? payload.prefs
+          : { blocked: payload?.blocked, done: payload?.done };
+      const result = await pushService.updatePrefs(payload?.endpoint, prefs);
+      if (!result.ok) {
+        sendJson(res, result.status || 400, { error: result.error });
+        return;
+      }
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
     // --- static under /herd ---
     // Exact /herd (no trailing slash) would make relative assets like ./style.css
     // resolve to /style.css outside our route. Redirect so the browser stays under /herd/.

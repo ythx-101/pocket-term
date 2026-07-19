@@ -186,10 +186,14 @@ async function enableWebPush() {
     renderPushDiagnostic(steps);
 
     stage = '服务端订阅登记';
+    // H2: send Me-page blocked/done prefs with the subscription so dispatch can filter.
     const saveRes = await fetch(`${BASE}/api/push/subscribe`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(subscription.toJSON()),
+      body: JSON.stringify({
+        ...subscription.toJSON(),
+        prefs: getNotifyPrefs(),
+      }),
     });
     const saveBody = await saveRes.json().catch(() => ({}));
     if (!saveRes.ok) throw new Error(`订阅登记 HTTP ${saveRes.status} (${saveBody.error || 'unknown'})`);
@@ -200,6 +204,29 @@ async function enableWebPush() {
     renderPushDiagnostic([...steps, diagnosticError(stage, err)], 'err');
   } finally {
     if (button) button.disabled = false;
+  }
+}
+
+/**
+ * H2: push current Me-page notify toggles to the server for this browser's
+ * push subscription (best-effort; no-op if not subscribed yet).
+ */
+async function syncPushPrefs() {
+  try {
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    const registration = await navigator.serviceWorker.getRegistration(`${BASE}/`);
+    const sub = await registration?.pushManager?.getSubscription?.();
+    if (!sub?.endpoint) return;
+    await fetch(`${BASE}/api/push/prefs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        endpoint: sub.endpoint,
+        prefs: getNotifyPrefs(),
+      }),
+    });
+  } catch {
+    /* best-effort */
   }
 }
 
@@ -1613,14 +1640,17 @@ function wire() {
     updateComposerVisibility();
   });
 
-  // Notification toggles (M2.6): Web Push intent only — list status is always on.
+  // Notification toggles (M2.6/M2.7): Web Push only — list status is always on.
+  // H2: also POST prefs so dispatch() filters blocked/done per subscription.
   $('#toggle-notify-blocked')?.addEventListener('change', (ev) => {
     const on = /** @type {HTMLInputElement} */ (ev.target).checked;
     localStorage.setItem(LS_NOTIFY_BLOCKED, on ? '1' : '0');
+    void syncPushPrefs();
   });
   $('#toggle-notify-done')?.addEventListener('change', (ev) => {
     const on = /** @type {HTMLInputElement} */ (ev.target).checked;
     localStorage.setItem(LS_NOTIFY_DONE, on ? '1' : '0');
+    void syncPushPrefs();
   });
   $('#btn-enable-push')?.addEventListener('click', () => enableWebPush());
 
