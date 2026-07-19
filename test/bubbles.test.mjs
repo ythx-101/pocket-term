@@ -9,6 +9,7 @@ import {
   stripAnsi,
   compressBlankLines,
   isDecorativeLine,
+  isSpinnerLine,
   stripFrameBorders,
   cleanStreamLines,
 } from '../lib/bubbles.js';
@@ -51,10 +52,29 @@ describe('diffNewText', () => {
     assert.deepEqual(diffNewText(prev, next), ['F', 'G']);
   });
 
-  it('full redraw: prefers over-including (all next lines)', () => {
+  it('full redraw: emits all truly new content lines', () => {
     const prev = 'old1\nold2\n';
     const next = 'new1\nnew2\nnew3\n';
     assert.deepEqual(diffNewText(prev, next), ['new1', 'new2', 'new3']);
+  });
+
+  it('full redraw: same body + spinner/frame churn → empty (no dump)', () => {
+    const body = [
+      '╭──────────────────╮',
+      '│ 最终摘要：完成     │',
+      '│ done with task   │',
+      '╰──────────────────╯',
+    ];
+    const prev = [...body, '✻ Thinking…'].join('\n') + '\n';
+    const next = [...body, '✶ Working…'].join('\n') + '\n';
+    assert.deepEqual(diffNewText(prev, next), []);
+  });
+
+  it('full redraw: drops decorative/spinner; keeps only new content', () => {
+    const prev = ['────────', 'old line', '✻ Thinking…'].join('\n') + '\n';
+    const next =
+      ['────────', 'old line', '新内容行', '✶ Working…'].join('\n') + '\n';
+    assert.deepEqual(diffNewText(prev, next), ['新内容行']);
   });
 
   it('CJK append without losing characters', () => {
@@ -107,6 +127,26 @@ describe('review fixes: OSC ST termination + indented frames', () => {
     assert.equal(stripFrameBorders('  │ a │ b │'), 'a │ b');
     // borderless indented lines keep their indentation (code blocks)
     assert.equal(stripFrameBorders('    code line'), '    code line');
+  });
+});
+
+describe('spinner lines (Tier B redraw noise)', () => {
+  it('isSpinnerLine: Claude Code / braille glyphs', () => {
+    assert.equal(isSpinnerLine('✻ Thinking…'), true);
+    assert.equal(isSpinnerLine('  ✶ Working…'), true);
+    assert.equal(isSpinnerLine('⠋ running'), true);
+    assert.equal(isSpinnerLine('最终摘要：完成'), false);
+    assert.equal(isSpinnerLine('███░░░ 60%'), false);
+    assert.equal(isSpinnerLine('plain output'), false);
+  });
+
+  it('cleanStreamLines drops spinner rows (blank-compressed like frames)', () => {
+    // Spinner → empty slot; compressBlankLines keeps a single blank between body.
+    assert.deepEqual(
+      cleanStreamLines(['body line', '✻ Thinking…', 'after']),
+      ['body line', '', 'after']
+    );
+    assert.deepEqual(cleanStreamLines(['✻ Thinking…', '✶ Working…']), []);
   });
 });
 

@@ -1,5 +1,6 @@
 /**
  * P3.2 review fixes: Tier A/B dedupe + clean shutdown.
+ * M1-fix4: Tier B multi-frame redraw dedupe.
  */
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -9,7 +10,221 @@ import os from 'node:os';
 import {
   createStateManager,
   shouldEmitTierB,
+  isDuplicateStreamBubble,
+  TIER_B_STREAM_DEDUPE_MS,
 } from '../lib/state-manager.js';
+
+describe('isDuplicateStreamBubble (Tier B redraw dedupe)', () => {
+  it('matches trimmed text within window among recent stream bubbles', () => {
+    const rt = {
+      buffer: [
+        { stream: true, text: '  hello 世界  ', ts: 1000 },
+        { stream: true, text: 'other', ts: 2000 },
+      ],
+      recentStreamBroadcasts: [{ text: 'hello 世界', ts: 1000 }],
+    };
+    assert.equal(isDuplicateStreamBubble(rt, 'hello 世界', 5000), true);
+    assert.equal(isDuplicateStreamBubble(rt, 'hello 世界', 1000 + TIER_B_STREAM_DEDUPE_MS + 1), false);
+    assert.equal(isDuplicateStreamBubble(rt, 'brand new', 5000), false);
+  });
+});
+
+describe('Tier B multi-frame TUI redraw: body only once', () => {
+  it('same body + changing spinner/border frames → one stream bubble; re-allow after window; CJK', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-redraw-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+
+    /** @type {string} */
+    let screenText = '';
+    const client = {
+      rpc: async (method) => {
+        if (method === 'pane.read') {
+          return { type: 'pane_read', read: { text: screenText } };
+        }
+        throw new Error(`unexpected ${method}`);
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+
+    const mgr = createStateManager({
+      client,
+      stateDir,
+      allowedRoot: tmp,
+    });
+    try {
+      const paneId = 'w9:p8';
+      const rt = mgr._internal.ensureRuntime(paneId);
+      assert.equal(shouldEmitTierB(rt), true);
+
+      const bodyLines = [
+        '╭────────────────────────╮',
+        '│ 任务结果：已完成         │',
+        '│ summary: all green     │',
+        '╰────────────────────────╯',
+      ];
+      const spinners = ['✻ Thinking…', '✶ Working…', '✳ Crunching…', '✦ Finishing…'];
+
+      // Seed prevText as empty first frame is ingested as baseline via explicit seed
+      // (mirrors runOutputLoop seed) then feed multi-frame redraw sequence.
+      screenText = [...bodyLines, spinners[0]].join('\n') + '\n';
+      rt.prevText = screenText;
+
+      // 13 frames of redraw: same body, churning spinner + re-drawn frame
+      // (reproduces live w9:p8 13× duplicate-bubble pattern).
+      for (let i = 0; i < 13; i++) {
+        const spin = spinners[i % spinners.length];
+        // Slight border pad change every other frame (breaks string anchors).
+        const top =
+          i % 2 === 0
+            ? '╭────────────────────────╮'
+            : '╭─────────────────────────╮';
+        const frame = [
+          top,
+          '│ 任务结果：已完成         │',
+          '│ summary: all green     │',
+          '╰────────────────────────╯',
+          spin,
+        ];
+        screenText = frame.join('\n') + '\n';
+        await mgr._internal.ingestPaneOutput(paneId);
+      }
+
+      // Force seal of any open Tier B lines
+      mgr._internal.sealOpen(paneId);
+
+      const stream1 = rt.buffer.filter((b) => b.stream === true);
+      const bodyHits1 = stream1.filter(
+        (b) =>
+          /任务结果：已完成/.test(b.text || '') ||
+          /summary: all green/.test(b.text || '')
+      );
+      assert.ok(
+        bodyHits1.length <= 1,
+        `body must broadcast at most once after 13 redraw frames, got ${bodyHits1.length}: ${bodyHits1.map((b) => b.text).join(' || ')}`
+      );
+
+      // Pure append of genuinely new CJK content must still produce a bubble.
+      const tNew = 10_000;
+      screenText =
+        [...bodyLines, '新的输出行：中文追加', '✶ Working…'].join('\n') + '\n';
+      // Force prev to a state with no common anchor so path is full-redraw-ish,
+      // but new CJK line is absent from prev → must emit.
+      rt.prevText = ['unrelated old screen', '✻ Thinking…'].join('\n') + '\n';
+      await mgr._internal.ingestPaneOutput(paneId);
+      // Use synthetic silence seal via append gap
+      mgr._internal.appendTierBLines(paneId, [], tNew);
+      mgr._internal.sealOpen(paneId);
+
+      const afterNew = rt.buffer.filter((b) => b.stream === true);
+      assert.ok(
+        afterNew.some((b) => /新的输出行：中文追加/.test(b.text || '')),
+        'new CJK content must still form a stream bubble'
+      );
+
+      // After the dedupe window, identical body may broadcast again (re-run).
+      const tLater = 1000 + TIER_B_STREAM_DEDUPE_MS + 5_000;
+      // Push a sealed bubble with old ts already present; now seal same text later.
+      mgr._internal.appendTierBLines(
+        paneId,
+        ['任务结果：已完成', 'summary: all green'],
+        tLater
+      );
+      mgr._internal.sealOpen(paneId);
+
+      const bodyHitsLater = rt.buffer.filter(
+        (b) =>
+          b.stream === true &&
+          /任务结果：已完成/.test(b.text || '') &&
+          /summary: all green/.test(b.text || '') &&
+          !/新的输出行/.test(b.text || '')
+      );
+      assert.ok(
+        bodyHitsLater.length >= 1,
+        'identical body after dedupe window must be allowed (not cross-session kill)'
+      );
+      // At least one of them should carry the late timestamp (or be a second copy).
+      const lateCopy = bodyHitsLater.filter((b) => (Number(b.ts) || 0) >= tLater - 1);
+      assert.ok(
+        lateCopy.length >= 1 || bodyHitsLater.length >= 2,
+        'expected a post-window re-broadcast of the same body'
+      );
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('13-frame redraw via appendTierBLines+seal only seals unique body once', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-redraw2-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+
+    const mgr = createStateManager({
+      client: {
+        rpc: async () => {
+          throw new Error('no rpc');
+        },
+        subscribe: () => ({ dead: false, close() {} }),
+      },
+      stateDir,
+      allowedRoot: tmp,
+    });
+    try {
+      const paneId = 'w9:p8';
+      const body = '最终摘要行\nstatus ok';
+      // Simulate 13 seal cycles of the same cleaned body (worst-case redraw spam).
+      for (let i = 0; i < 13; i++) {
+        mgr._internal.appendTierBLines(
+          paneId,
+          [
+            '╭──────────╮',
+            '│ 最终摘要行 │',
+            '│ status ok │',
+            '╰──────────╯',
+            i % 2 === 0 ? '✻ Thinking…' : '✶ Working…',
+          ],
+          1000 + i * 100
+        );
+        // Seal each frame as if silence/status closed the card every time.
+        mgr._internal.sealOpen(paneId);
+      }
+
+      const rt = mgr._internal.ensureRuntime(paneId);
+      const stream = rt.buffer.filter((b) => b.stream === true);
+      const bodyBubbles = stream.filter((b) => {
+        const t = (b.text || '').trim();
+        return t.includes('最终摘要行') && t.includes('status ok');
+      });
+      assert.equal(
+        bodyBubbles.length,
+        1,
+        `expected exactly 1 body bubble after 13 seals, got ${bodyBubbles.length}`
+      );
+      assert.equal(bodyBubbles[0].text.includes('✻'), false);
+      assert.equal(bodyBubbles[0].text.includes('✶'), false);
+
+      // Past window: same body allowed again.
+      const later = 1000 + TIER_B_STREAM_DEDUPE_MS + 1000;
+      mgr._internal.appendTierBLines(
+        paneId,
+        ['最终摘要行', 'status ok'],
+        later
+      );
+      mgr._internal.sealOpen(paneId);
+      const bodyBubbles2 = rt.buffer.filter(
+        (b) =>
+          b.stream === true &&
+          (b.text || '').includes('最终摘要行') &&
+          (b.text || '').includes('status ok')
+      );
+      assert.equal(bodyBubbles2.length, 2, 'second copy after window');
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('shouldEmitTierB / no A+B duplicate', () => {
   it('suppresses Tier B when tier A or transcriptPath set', () => {
