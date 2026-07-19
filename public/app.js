@@ -12,12 +12,19 @@ import {
   parseRoute,
   sseBackoffMs,
   refetchAfterSseReconnect,
+  shouldShowComposer,
+  formatHerdrAbout,
+  hotkeyPayload,
+  shouldConfirmBeforeSend,
+  sendErrorToast,
 } from './spa-utils.js';
 
 const APP_VERSION = '0.0.1';
 const LS_THEME = 'pt2-theme';
 const LS_FONT = 'pt2-font';
 const LS_DIM = 'pt2-dim';
+const LS_CONFIRM_SEND = 'pt2-confirm-send';
+const LS_LOCAL_READONLY = 'pt2-local-readonly';
 
 /** API base: /herd when served under /herd/ */
 function apiBase() {
@@ -73,12 +80,23 @@ let connMode = 'unknown'; // ok | warn | err | unknown
 let stickToBottom = true;
 let loadingEarlier = false;
 let bootFailed = false; // first state fetch failed → offline empty-state
+let sending = false;
+/** @type {HTMLElement|null} */
+let toastHost = null;
 
 // —— settings ——
+function getLocalPrefs() {
+  return {
+    confirmBeforeSend: localStorage.getItem(LS_CONFIRM_SEND) === '1',
+    localReadonly: localStorage.getItem(LS_LOCAL_READONLY) === '1',
+  };
+}
+
 function loadSettings() {
   const theme = localStorage.getItem(LS_THEME) || 'dark';
   const font = localStorage.getItem(LS_FONT) || 'md';
   const dim = localStorage.getItem(LS_DIM) || '35';
+  const prefs = getLocalPrefs();
   document.documentElement.setAttribute('data-theme', theme);
   document.documentElement.setAttribute('data-font', font);
   document.documentElement.style.setProperty(
@@ -95,11 +113,21 @@ function loadSettings() {
   });
   const ver = $('#app-version');
   if (ver) ver.textContent = APP_VERSION;
+  const confirmEl = /** @type {HTMLInputElement|null} */ (
+    $('#toggle-confirm-send')
+  );
+  if (confirmEl) confirmEl.checked = prefs.confirmBeforeSend;
+  const roEl = /** @type {HTMLInputElement|null} */ (
+    $('#toggle-local-readonly')
+  );
+  if (roEl) roEl.checked = prefs.localReadonly;
   // Keep browser chrome color in sync with the in-app theme toggle.
   const chrome = $('meta[name="theme-color"]:not([media])');
   if (chrome) {
     chrome.setAttribute('content', theme === 'light' ? '#fffaf3' : '#232136');
   }
+  updateHerdrAbout();
+  updateComposerVisibility();
 }
 
 function setTheme(theme) {
@@ -109,6 +137,55 @@ function setTheme(theme) {
 function setFont(font) {
   localStorage.setItem(LS_FONT, font);
   loadSettings();
+}
+
+function updateHerdrAbout() {
+  const elAbout = $('#herdr-about');
+  if (elAbout) elAbout.textContent = formatHerdrAbout(state);
+}
+
+/**
+ * @param {string} message
+ * @param {'info'|'warn'|'err'} [kind]
+ */
+function showToast(message, kind = 'info') {
+  if (!toastHost) {
+    toastHost = el('div', {
+      className: 'toast-host',
+      id: 'toast-host',
+      'aria-live': 'polite',
+    });
+    document.body.append(toastHost);
+  }
+  const node = el('div', {
+    className: `toast${kind === 'info' ? '' : ` ${kind}`}`,
+    text: message,
+  });
+  toastHost.append(node);
+  setTimeout(() => {
+    try {
+      node.remove();
+    } catch {
+      /* ignore */
+    }
+  }, 2800);
+}
+
+function updateComposerVisibility() {
+  const show = shouldShowComposer(state, getLocalPrefs());
+  const composer = $('#composer');
+  const roBar = $('#readonly-bar');
+  if (composer) composer.classList.toggle('hidden', !show);
+  if (roBar) {
+    roBar.classList.toggle('hidden', show);
+    if (state?.readonly) {
+      roBar.textContent = '只读模式 · 服务端已关闭发送';
+    } else if (getLocalPrefs().localReadonly) {
+      roBar.textContent = '只读模式 · 本机开关已开';
+    } else {
+      roBar.textContent = '只读模式 · 无法发送';
+    }
+  }
 }
 
 // —— connection LED ——
@@ -154,6 +231,104 @@ async function postSeen(paneId) {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * POST /herd/api/pane/:id/send
+ * @param {string} paneId
+ * @param {string} text
+ * @param {'run'|'text'} [mode]
+ */
+async function postSend(paneId, text, mode = 'run') {
+  const res = await fetch(
+    `${BASE}/api/pane/${encodeURIComponent(paneId)}/send`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, mode }),
+    }
+  );
+  let body = null;
+  try {
+    body = await res.json();
+  } catch {
+    body = null;
+  }
+  return { res, body };
+}
+
+/**
+ * @param {{
+ *   text: string,
+ *   mode?: 'run'|'text',
+ *   clearInput?: boolean,
+ *   skipConfirm?: boolean,
+ *   label?: string,
+ * }} opts
+ */
+async function sendToActivePane(opts) {
+  const paneId = activePaneId;
+  if (!paneId || sending) return;
+  if (!shouldShowComposer(state, getLocalPrefs())) {
+    showToast('当前为只读模式', 'warn');
+    return;
+  }
+  const text = opts.text ?? '';
+  const mode = opts.mode === 'text' ? 'text' : 'run';
+  if (
+    !opts.skipConfirm &&
+    shouldConfirmBeforeSend(getLocalPrefs(), text, {
+      skipEmpty: mode === 'run' && !text,
+    })
+  ) {
+    const preview =
+      text === ''
+        ? opts.label || '回车'
+        : text.length > 80
+          ? `${text.slice(0, 80)}…`
+          : text;
+    const ok = window.confirm(`发送到当前会话？\n\n${preview}`);
+    if (!ok) return;
+  }
+
+  sending = true;
+  const btn = /** @type {HTMLButtonElement|null} */ ($('#btn-send'));
+  if (btn) btn.disabled = true;
+  try {
+    const { res, body } = await postSend(paneId, text, mode);
+    if (!res.ok) {
+      showToast(sendErrorToast(res.status, body), res.status === 429 ? 'warn' : 'err');
+      return;
+    }
+    // Optimistic right bubble for typed text (SSE may also deliver; deduped ±10s).
+    if (text) {
+      const ts = Date.now();
+      appendBubble(paneId, {
+        id: `local-user:${paneId}:${ts}`,
+        ts,
+        text,
+        role: 'user',
+      });
+    }
+    if (opts.clearInput !== false) {
+      const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
+      if (input) {
+        input.value = '';
+        autoSizeComposer(input);
+      }
+    }
+  } catch {
+    showToast('发送失败：网络错误', 'err');
+  } finally {
+    sending = false;
+    if (btn) btn.disabled = false;
+  }
+}
+
+function autoSizeComposer(input) {
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(120, Math.max(40, input.scrollHeight))}px`;
 }
 
 // —— list rendering ——
@@ -378,6 +553,18 @@ function appendBubble(paneId, msg, { render = true } = {}) {
   const bucket = ensureBubbleBucket(paneId);
   const id = String(msg.id ?? `${msg.ts}:${msg.role}:${msg.text?.slice?.(0, 20)}`);
   if (bucket.ids.has(id)) return false;
+  // Dedupe optimistic local user bubble vs SSE/server echo (±10s, same text).
+  if (msg.role === 'user') {
+    const text = String(msg.text ?? '');
+    const ts = Number(msg.ts) || Date.now();
+    const dup = bucket.items.some(
+      (m) =>
+        m.role === 'user' &&
+        String(m.text ?? '') === text &&
+        Math.abs((Number(m.ts) || 0) - ts) <= 10_000
+    );
+    if (dup) return false;
+  }
   bucket.ids.add(id);
   bucket.items.push({ ...msg, id });
   bucket.items.sort((a, b) => (a.ts || 0) - (b.ts || 0));
@@ -529,6 +716,8 @@ function applyState(next) {
   } else {
     banner?.classList.add('hidden');
   }
+  updateHerdrAbout();
+  updateComposerVisibility();
   if (activePaneId) {
     updateChatHeader(activePaneId);
   }
@@ -684,6 +873,70 @@ function wire() {
   });
   $$('.seg-btn[data-font-set]').forEach((b) => {
     b.addEventListener('click', () => setFont(b.dataset.fontSet));
+  });
+
+  // Me-page send prefs
+  $('#toggle-confirm-send')?.addEventListener('change', (ev) => {
+    const on = /** @type {HTMLInputElement} */ (ev.target).checked;
+    localStorage.setItem(LS_CONFIRM_SEND, on ? '1' : '0');
+  });
+  $('#toggle-local-readonly')?.addEventListener('change', (ev) => {
+    const on = /** @type {HTMLInputElement} */ (ev.target).checked;
+    localStorage.setItem(LS_LOCAL_READONLY, on ? '1' : '0');
+    updateComposerVisibility();
+  });
+
+  // Wallpaper placeholder (M2)
+  $('#btn-wallpaper')?.addEventListener('click', () => {
+    showToast('壁纸功能 M2 上线，图片由主人提供', 'info');
+  });
+
+  // Composer: tap send (do not hijack Enter — mobile IME safe)
+  $('#btn-send')?.addEventListener('click', () => {
+    const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
+    const text = input?.value ?? '';
+    sendToActivePane({ text, mode: 'run', clearInput: true });
+  });
+  const composerInput = /** @type {HTMLTextAreaElement|null} */ (
+    $('#composer-input')
+  );
+  composerInput?.addEventListener('input', () => autoSizeComposer(composerInput));
+  // Prevent accidental form submit; Enter inserts newline (IME-safe).
+  composerInput?.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing) {
+      // Mobile IME: do not steal Enter for send. Desktop: still newline unless
+      // user taps 发送. Spec: 点按发送, Enter 不抢.
+      /* leave default newline behavior for Shift+Enter; plain Enter also newline */
+    }
+  });
+
+  $$('.hotkey-btn[data-hotkey]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const key = b.dataset.hotkey;
+      try {
+        const payload = hotkeyPayload(/** @type {any} */ (key));
+        sendToActivePane({
+          text: payload.text,
+          mode: payload.mode,
+          clearInput: false,
+          skipConfirm: payload.mode === 'run' && payload.text === '',
+          label: payload.label,
+        });
+      } catch {
+        /* ignore unknown */
+      }
+    });
+  });
+
+  $('#btn-confirm-enter')?.addEventListener('click', () => {
+    const payload = hotkeyPayload('enter');
+    sendToActivePane({
+      text: payload.text,
+      mode: payload.mode,
+      clearInput: false,
+      skipConfirm: true,
+      label: '回车确认',
+    });
   });
 
   window.addEventListener('hashchange', () => {

@@ -20,6 +20,11 @@ import {
   parseRoute,
   sseBackoffMs,
   refetchAfterSseReconnect,
+  shouldShowComposer,
+  formatHerdrAbout,
+  hotkeyPayload,
+  shouldConfirmBeforeSend,
+  sendErrorToast,
 } from '../public/spa-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -194,6 +199,57 @@ describe('spa pure: avatar / status / route / contacts', () => {
   });
 });
 
+describe('spa pure: send UI helpers', () => {
+  it('shouldShowComposer hides on bridge readonly or local readonly', () => {
+    assert.equal(shouldShowComposer({ readonly: false }, { localReadonly: false }), true);
+    assert.equal(shouldShowComposer({ readonly: true }, { localReadonly: false }), false);
+    assert.equal(shouldShowComposer({ readonly: false }, { localReadonly: true }), false);
+    assert.equal(shouldShowComposer(null, { localReadonly: false }), true);
+  });
+
+  it('formatHerdrAbout matches herdr X · protocol Y', () => {
+    assert.equal(
+      formatHerdrAbout({ herdr_version: '0.7.3', protocol: 16 }),
+      'herdr 0.7.3 · protocol 16'
+    );
+    assert.equal(formatHerdrAbout({}), 'herdr ? · protocol ?');
+  });
+
+  it('hotkeyPayload: Esc/Ctrl+C are control chars; enter is empty run', () => {
+    assert.deepEqual(hotkeyPayload('enter'), {
+      text: '',
+      mode: 'run',
+      label: '回车',
+    });
+    const esc = hotkeyPayload('esc');
+    assert.equal(esc.mode, 'text');
+    assert.equal(esc.text, '\x1b');
+    const cc = hotkeyPayload('ctrl-c');
+    assert.equal(cc.mode, 'text');
+    assert.equal(cc.text, '\x03');
+  });
+
+  it('shouldConfirmBeforeSend respects toggle and skipEmpty', () => {
+    assert.equal(shouldConfirmBeforeSend({ confirmBeforeSend: false }, 'hi'), false);
+    assert.equal(shouldConfirmBeforeSend({ confirmBeforeSend: true }, 'hi'), true);
+    assert.equal(
+      shouldConfirmBeforeSend({ confirmBeforeSend: true }, '', { skipEmpty: true }),
+      false
+    );
+    assert.equal(
+      shouldConfirmBeforeSend({ confirmBeforeSend: true }, '', { skipEmpty: false }),
+      true
+    );
+  });
+
+  it('sendErrorToast covers 429/403/404', () => {
+    assert.match(sendErrorToast(429, { error: 'rate_limited' }), /过快|稍后再试/);
+    assert.match(sendErrorToast(403, { error: 'readonly' }), /只读/);
+    assert.match(sendErrorToast(403, { error: 'cross_origin' }), /拒绝|跨域/);
+    assert.match(sendErrorToast(404, { error: 'pane_not_found' }), /不存在|关闭/);
+  });
+});
+
 describe('spa static via bridge', () => {
   /** @type {Awaited<ReturnType<typeof startServer>>} */
   let srv;
@@ -215,7 +271,7 @@ describe('spa static via bridge', () => {
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  it('GET /herd/ HTML has three-view mount points + tab bar', async () => {
+  it('GET /herd/ HTML has three-view mount points + tab bar + composer hooks', async () => {
     const res = await fetch(`${base}/herd/`);
     assert.equal(res.status, 200);
     assert.match(res.headers.get('content-type') || '', /text\/html/);
@@ -225,6 +281,14 @@ describe('spa static via bridge', () => {
     assert.match(html, /id="view-contacts"/);
     assert.match(html, /id="view-me"/);
     assert.match(html, /id="tab-bar"/);
+    assert.match(html, /id="composer"/);
+    assert.match(html, /id="composer-input"/);
+    assert.match(html, /id="btn-send"/);
+    assert.match(html, /id="btn-confirm-enter"/);
+    assert.match(html, /id="btn-wallpaper"/);
+    assert.match(html, /id="toggle-confirm-send"/);
+    assert.match(html, /id="toggle-local-readonly"/);
+    assert.match(html, /id="herdr-about"/);
     assert.match(html, /app\.js/);
     assert.match(html, /style\.css/);
   });
@@ -241,5 +305,95 @@ describe('spa static via bridge', () => {
     const util = await fetch(`${base}/herd/spa-utils.js`);
     assert.equal(util.status, 200);
     assert.match(util.headers.get('content-type') || '', /javascript/);
+  });
+
+  it('GET /herd/api/state includes herdr_version and readonly', async () => {
+    let body;
+    for (let i = 0; i < 30; i++) {
+      const res = await fetch(`${base}/herd/api/state`);
+      assert.equal(res.status, 200);
+      body = await res.json();
+      if (body.herdr === 'connected' || body.herdr_version) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    assert.ok('herdr_version' in body, 'herdr_version field present');
+    assert.ok('readonly' in body, 'readonly field present');
+    assert.equal(body.readonly, false);
+    // Live herdr ping should populate version (e.g. 0.7.3)
+    if (body.herdr === 'connected') {
+      assert.equal(typeof body.herdr_version, 'string');
+      assert.ok(body.herdr_version.length > 0);
+      assert.equal(body.protocol, 16);
+    }
+  });
+});
+
+describe('spa state readonly flag (PT2_READONLY)', () => {
+  it('state.readonly true when server started readonly', async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-spa-ro-'));
+    const mockClient = {
+      allowWrite: false,
+      rpc: async (method, _params, callOpts = {}) => {
+        if (method === 'ping') {
+          return { type: 'pong', protocol: 16, version: '0.7.3' };
+        }
+        if (method === 'session.snapshot') {
+          return {
+            snapshot: {
+              workspaces: [],
+              tabs: [],
+              panes: [],
+              agents: [],
+            },
+          };
+        }
+        if (method === 'pane.read') return { read: { text: '' } };
+        if (method === 'events.wait') {
+          await new Promise((resolve, reject) => {
+            const t = setTimeout(resolve, 200);
+            const sig = callOpts.signal;
+            if (sig) {
+              const onAbort = () => {
+                clearTimeout(t);
+                const err = new Error('aborted');
+                err.code = 'aborted';
+                reject(err);
+              };
+              if (sig.aborted) {
+                onAbort();
+                return;
+              }
+              sig.addEventListener('abort', onAbort, { once: true });
+            }
+          });
+          const err = new Error('timeout');
+          err.code = 'timeout';
+          throw err;
+        }
+        return {};
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const srv = await startServer({
+      host: '127.0.0.1',
+      port: 0,
+      stateDir,
+      client: mockClient,
+      readonly: true,
+    });
+    try {
+      const body = await (await fetch(`http://127.0.0.1:${srv.port}/herd/api/state`)).json();
+      assert.equal(body.readonly, true);
+      assert.equal(body.herdr_version, '0.7.3');
+      assert.equal(body.protocol, 16);
+      assert.equal(
+        formatHerdrAbout(body),
+        'herdr 0.7.3 · protocol 16'
+      );
+      assert.equal(shouldShowComposer(body, { localReadonly: false }), false);
+    } finally {
+      await srv.close();
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

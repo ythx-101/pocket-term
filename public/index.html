@@ -64,7 +64,15 @@
           >
         </header>
         <div id="blocked-bar" class="blocked-bar hidden" role="status">
-          等你回复
+          <span class="blocked-bar-text">等你回复</span>
+          <button
+            type="button"
+            id="btn-confirm-enter"
+            class="blocked-confirm-btn"
+            title="发送回车确认"
+          >
+            回车确认
+          </button>
         </div>
         <div id="bubble-scroll" class="bubble-scroll scroll">
           <div id="load-earlier" class="load-earlier hidden">
@@ -77,7 +85,32 @@
         <button type="button" id="btn-jump-bottom" class="jump-bottom hidden">
           ↓ 新消息
         </button>
-        <footer class="readonly-bar">只读模式 · M1 开放发送</footer>
+        <footer id="composer" class="composer hidden">
+          <div class="hotkey-bar" role="toolbar" aria-label="快捷键">
+            <button type="button" class="hotkey-btn" data-hotkey="esc">Esc</button>
+            <button type="button" class="hotkey-btn" data-hotkey="ctrl-c">
+              Ctrl+C
+            </button>
+            <button type="button" class="hotkey-btn" data-hotkey="enter">
+              回车
+            </button>
+          </div>
+          <div class="composer-row">
+            <textarea
+              id="composer-input"
+              class="composer-input"
+              rows="1"
+              placeholder="发给 agent…"
+              enterkeyhint="send"
+              autocomplete="off"
+              autocapitalize="sentences"
+            ></textarea>
+            <button type="button" id="btn-send" class="send-btn">发送</button>
+          </div>
+        </footer>
+        <footer id="readonly-bar" class="readonly-bar">
+          只读模式 · 无法发送
+        </footer>
       </section>
 
       <!-- 通讯录 -->
@@ -107,21 +140,56 @@
           </div>
           <div class="settings-group">
             <div class="settings-label">聊天背景</div>
-            <div class="wallpaper-placeholder">
-              <span>壁纸 · 即将上线</span>
-              <label class="dim-row">
-                <span>暗化</span>
-                <input
-                  id="dim-slider"
-                  type="range"
-                  min="0"
-                  max="80"
-                  value="35"
-                  disabled
-                  aria-label="壁纸暗化（即将上线）"
-                />
-              </label>
-            </div>
+            <button
+              type="button"
+              id="btn-wallpaper"
+              class="wallpaper-card"
+              aria-label="选择壁纸（M2 上线）"
+            >
+              <span class="wallpaper-thumb" aria-hidden="true"></span>
+              <span class="wallpaper-card-main">
+                <span class="wallpaper-card-title">选择壁纸</span>
+                <span class="wallpaper-card-sub">M2 上线 · 图片由主人提供</span>
+              </span>
+              <span class="wallpaper-card-chevron" aria-hidden="true">›</span>
+            </button>
+            <label class="dim-row dim-row-soon">
+              <span>暗化</span>
+              <input
+                id="dim-slider"
+                type="range"
+                min="0"
+                max="80"
+                value="35"
+                disabled
+                aria-label="壁纸暗化（即将上线）"
+              />
+            </label>
+          </div>
+          <div class="settings-group">
+            <div class="settings-label">发送</div>
+            <label class="toggle-row">
+              <span>发送前确认</span>
+              <input
+                id="toggle-confirm-send"
+                type="checkbox"
+                role="switch"
+                aria-label="发送前确认"
+              />
+            </label>
+            <label class="toggle-row">
+              <span>只读模式（本机）</span>
+              <input
+                id="toggle-local-readonly"
+                type="checkbox"
+                role="switch"
+                aria-label="本机只读模式"
+              />
+            </label>
+            <p class="settings-hint">
+              本机只读仅影响此浏览器；服务端熔断见
+              <code>PT2_READONLY</code>
+            </p>
           </div>
           <div class="settings-group">
             <div class="settings-label">字号</div>
@@ -140,6 +208,7 @@
           <div class="settings-group about">
             <div class="settings-label">关于</div>
             <p>pocket-term-2 · v<span id="app-version">0.0.1</span></p>
+            <p id="herdr-about">herdr ? · protocol ?</p>
             <p>
               <a href="./api/state" target="_blank" rel="noopener"
                 >调试：/herd/api/state</a

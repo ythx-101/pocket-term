@@ -269,3 +269,96 @@ export async function refetchAfterSseReconnect(deps) {
     messagesPaneId: paneId,
   };
 }
+
+/**
+ * Whether the chat composer should be shown (vs M0-style readonly bar).
+ * Hidden when bridge is readonly (PT2_READONLY) or the local me-page toggle is on.
+ *
+ * @param {{ readonly?: boolean }|null|undefined} state
+ * @param {{ localReadonly?: boolean }} [prefs]
+ */
+export function shouldShowComposer(state, prefs = {}) {
+  if (prefs.localReadonly === true) return false;
+  if (state?.readonly === true) return false;
+  return true;
+}
+
+/**
+ * Format herdr version line for 我 / 关于.
+ * @param {{ herdr_version?: string|null, protocol?: number|string|null }|null|undefined} state
+ * @returns {string}
+ */
+export function formatHerdrAbout(state) {
+  const ver =
+    state?.herdr_version != null && String(state.herdr_version).trim()
+      ? String(state.herdr_version).trim()
+      : '?';
+  const proto =
+    state?.protocol != null && state.protocol !== ''
+      ? String(state.protocol)
+      : '?';
+  return `herdr ${ver} · protocol ${proto}`;
+}
+
+/**
+ * Preset hotkey → send payload (control chars via pane.send_text, not send_keys).
+ * @param {'enter'|'esc'|'ctrl-c'|'up'|'down'} key
+ * @returns {{ text: string, mode: 'run'|'text', label: string }}
+ */
+export function hotkeyPayload(key) {
+  switch (key) {
+    case 'enter':
+      // Empty run = pure Enter (shell/agent confirm).
+      return { text: '', mode: 'run', label: '回车' };
+    case 'esc':
+      return { text: '\x1b', mode: 'text', label: 'Esc' };
+    case 'ctrl-c':
+      return { text: '\x03', mode: 'text', label: 'Ctrl+C' };
+    case 'up':
+      return { text: '\x1b[A', mode: 'text', label: '↑' };
+    case 'down':
+      return { text: '\x1b[B', mode: 'text', label: '↓' };
+    default:
+      throw new Error(`unknown hotkey: ${key}`);
+  }
+}
+
+/**
+ * Decide whether to prompt before send (local 发送前确认).
+ * Empty-text hotkeys (Enter confirm) can skip confirm when skipEmpty is true.
+ *
+ * @param {{ confirmBeforeSend?: boolean }} prefs
+ * @param {string} text
+ * @param {{ skipEmpty?: boolean }} [opts]
+ * @returns {boolean}
+ */
+export function shouldConfirmBeforeSend(prefs, text, opts = {}) {
+  if (!prefs?.confirmBeforeSend) return false;
+  if (opts.skipEmpty && !String(text ?? '')) return false;
+  return true;
+}
+
+/**
+ * Map send API failure to a short toast string.
+ * @param {number} status
+ * @param {{ error?: string }|null|undefined} body
+ */
+export function sendErrorToast(status, body) {
+  const err = body?.error || '';
+  if (status === 429 || err === 'rate_limited') {
+    return '发送过快，请稍后再试';
+  }
+  if (status === 403 && err === 'readonly') {
+    return '只读模式：服务端已关闭发送';
+  }
+  if (status === 403) {
+    return '发送被拒绝（跨域或权限）';
+  }
+  if (status === 404 || err === 'pane_not_found') {
+    return '会话不存在或已关闭';
+  }
+  if (status === 413) {
+    return '内容过长';
+  }
+  return err ? `发送失败：${err}` : `发送失败（${status || '?'}）`;
+}
