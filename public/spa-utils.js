@@ -412,3 +412,39 @@ export function wallpaperAssetUrl(base, name) {
   const b = String(base || '').replace(/\/$/, '');
   return `${b}/api/wallpaper/${encodeURIComponent(name)}`;
 }
+
+/** Collapse identical toast text within this window (ms). */
+export const TOAST_COLLAPSE_MS = 3000;
+/** Auto-dismiss toast after this many ms. */
+export const TOAST_DISMISS_MS = 4000;
+
+/**
+ * Pure toast-collapse decision: identical text within windowMs shows only once.
+ *
+ * @param {string} message
+ * @param {{ text: string, at: number }|null|undefined} last previous emit state
+ * @param {number} [now]
+ * @param {number} [windowMs]
+ * @returns {{ show: boolean, last: { text: string, at: number } }}
+ */
+export function shouldEmitToast(
+  message,
+  last,
+  now = Date.now(),
+  windowMs = TOAST_COLLAPSE_MS
+) {
+  const text = String(message ?? '');
+  const t = Number(now);
+  const win = Number(windowMs);
+  if (
+    last &&
+    last.text === text &&
+    Number.isFinite(t) &&
+    Number.isFinite(Number(last.at)) &&
+    Number.isFinite(win) &&
+    t - Number(last.at) < win
+  ) {
+    return { show: false, last };
+  }
+  return { show: true, last: { text, at: Number.isFinite(t) ? t : Date.now() } };
+}

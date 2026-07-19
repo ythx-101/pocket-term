@@ -1,6 +1,6 @@
 {
   "name": "pocket-term-2",
-  "version": "0.0.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Pocket agent fleet chat client — herdr-backed, WeChat-style (M0 read-only)",
   "type": "module",

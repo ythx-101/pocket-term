@@ -22,9 +22,11 @@ import {
   dimPercentToApi,
   wallpaperAssetUrl,
   DIM_SLIDER_MAX,
+  shouldEmitToast,
+  TOAST_DISMISS_MS,
 } from './spa-utils.js';
 
-const APP_VERSION = '0.0.1';
+const APP_VERSION = '0.2.0';
 const LS_THEME = 'pt2-theme';
 const LS_FONT = 'pt2-font';
 const LS_CONFIRM_SEND = 'pt2-confirm-send';
@@ -87,6 +89,8 @@ let bootFailed = false; // first state fetch failed → offline empty-state
 let sending = false;
 /** @type {HTMLElement|null} */
 let toastHost = null;
+/** @type {{ text: string, at: number }|null} */
+let lastToast = null;
 /** @type {{ wallpaper: string|null, dim: number }} */
 let userSettings = { wallpaper: null, dim: 0.35 };
 /** @type {Array<{ name: string, size: number }>} */
@@ -380,6 +384,10 @@ function updateHerdrAbout() {
  * @param {'info'|'warn'|'err'} [kind]
  */
 function showToast(message, kind = 'info') {
+  const decision = shouldEmitToast(message, lastToast, Date.now());
+  lastToast = decision.last;
+  if (!decision.show) return;
+
   if (!toastHost) {
     toastHost = el('div', {
       className: 'toast-host',
@@ -399,7 +407,7 @@ function showToast(message, kind = 'info') {
     } catch {
       /* ignore */
     }
-  }, 2800);
+  }, TOAST_DISMISS_MS);
 }
 
 function updateComposerVisibility() {

@@ -5,6 +5,7 @@
  */
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import fsSync from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
@@ -21,6 +22,20 @@ const STATE_DIR = path.join(ROOT, 'state');
 
 /** Max JSON body for POST /send and /settings (8 KiB). */
 export const SEND_BODY_MAX_BYTES = 8 * 1024;
+
+/** Fingerprinted SPA assets: long-cache + ?v= rewrite in HTML (and app.js→spa-utils). */
+export const FINGERPRINTED_ASSETS = new Set([
+  'app.js',
+  'style.css',
+  'spa-utils.js',
+]);
+
+/** Cache-Control for fingerprinted JS/CSS. */
+export const CACHE_FINGERPRINTED = 'public, max-age=31536000, immutable';
+/** Cache-Control for index.html (must revalidate every deploy). */
+export const CACHE_HTML = 'no-store';
+/** Cache-Control for wallpaper images. */
+export const CACHE_WALLPAPER = 'public, max-age=86400';
 
 const WALLPAPER_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
 
@@ -39,6 +54,71 @@ const MIME = {
   '.map': 'application/json; charset=utf-8',
   '.webp': 'image/webp',
 };
+
+/**
+ * Read package.json version once (sync, boot-time).
+ * @param {string} [root]
+ * @returns {string}
+ */
+export function readPkgVersion(root = ROOT) {
+  try {
+    const raw = fsSync.readFileSync(path.join(root, 'package.json'), 'utf8');
+    const pkg = JSON.parse(raw);
+    return String(pkg.version || '0.0.0');
+  } catch {
+    return '0.0.0';
+  }
+}
+
+/**
+ * Asset cache-bust token: package version + server start ms (unique every boot).
+ * @param {string} [pkgVersion]
+ * @param {number} [bootMs]
+ * @returns {string}
+ */
+export function createAssetVersion(pkgVersion = readPkgVersion(), bootMs = Date.now()) {
+  return `${pkgVersion}.${bootMs}`;
+}
+
+/**
+ * Rewrite SPA asset href/src in index.html to append ?v=<version>.
+ * @param {string} html
+ * @param {string} version
+ * @returns {string}
+ */
+export function injectAssetVersionInHtml(html, version) {
+  const v = encodeURIComponent(String(version));
+  return String(html).replace(
+    /(\.\/(?:app\.js|style\.css|spa-utils\.js))(?:\?[^"'\s>]*)?/g,
+    `$1?v=${v}`
+  );
+}
+
+/**
+ * Rewrite spa-utils import inside served app.js so the module URL busts too.
+ * @param {string} js
+ * @param {string} version
+ * @returns {string}
+ */
+export function injectAssetVersionInAppJs(js, version) {
+  const v = encodeURIComponent(String(version));
+  return String(js).replace(
+    /(from\s*['"])(\.\/spa-utils\.js)(?:\?[^'"]*)?(['"])/g,
+    `$1$2?v=${v}$3`
+  );
+}
+
+/**
+ * Cache-Control for a public/ basename.
+ * @param {string} basename e.g. "index.html", "app.js"
+ * @returns {string|null} header value, or null if no special policy
+ */
+export function cacheControlForStatic(basename) {
+  const name = path.basename(String(basename || ''));
+  if (name === 'index.html') return CACHE_HTML;
+  if (FINGERPRINTED_ASSETS.has(name)) return CACHE_FINGERPRINTED;
+  return null;
+}
 
 function sendJson(res, status, body, extraHeaders = {}) {
   const data = JSON.stringify(body);
@@ -311,6 +391,7 @@ export async function resolveStatic(urlPath, publicDir = PUBLIC_DIR) {
  *   socketPath?: string,
  *   client?: ReturnType<typeof createClient>,
  *   readonly?: boolean,
+ *   assetVersion?: string,
  * }} [options]
  */
 export async function startServer(options = {}) {
@@ -322,6 +403,10 @@ export async function startServer(options = {}) {
     options.readonly === true ||
     process.env.PT2_READONLY === '1' ||
     process.env.PT2_READONLY === 'true';
+  const assetVersion =
+    options.assetVersion != null && String(options.assetVersion)
+      ? String(options.assetVersion)
+      : createAssetVersion();
 
   const client =
     options.client ??
@@ -533,7 +618,7 @@ export async function startServer(options = {}) {
         res.writeHead(200, {
           'Content-Type': type,
           'Content-Length': data.length,
-          'Cache-Control': 'public, max-age=86400',
+          'Cache-Control': CACHE_WALLPAPER,
         });
         if (method === 'HEAD') res.end();
         else res.end(data);
@@ -599,13 +684,30 @@ export async function startServer(options = {}) {
           return;
         }
         try {
-          const data = await fs.readFile(resolved.file);
+          let data = await fs.readFile(resolved.file);
           const ext = path.extname(resolved.file).toLowerCase();
+          const basename = path.basename(resolved.file);
           const type = MIME[ext] || 'application/octet-stream';
-          res.writeHead(200, {
+          const headers = {
             'Content-Type': type,
-            'Content-Length': data.length,
-          });
+          };
+
+          // index.html: never cache; rewrite asset refs to ?v=<boot version>
+          if (basename === 'index.html') {
+            const html = injectAssetVersionInHtml(data.toString('utf8'), assetVersion);
+            data = Buffer.from(html, 'utf8');
+            headers['Cache-Control'] = CACHE_HTML;
+          } else if (FINGERPRINTED_ASSETS.has(basename)) {
+            // app.js must also rewrite its spa-utils import so the module URL busts.
+            if (basename === 'app.js') {
+              const js = injectAssetVersionInAppJs(data.toString('utf8'), assetVersion);
+              data = Buffer.from(js, 'utf8');
+            }
+            headers['Cache-Control'] = CACHE_FINGERPRINTED;
+          }
+
+          headers['Content-Length'] = data.length;
+          res.writeHead(200, headers);
           if (method === 'HEAD') res.end();
           else res.end(data);
           return;
@@ -663,6 +765,7 @@ export async function startServer(options = {}) {
     host,
     port: actualPort,
     readonly,
+    assetVersion,
     close,
   };
 }

@@ -7,7 +7,16 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { startServer } from '../server.js';
+import {
+  startServer,
+  createAssetVersion,
+  injectAssetVersionInHtml,
+  injectAssetVersionInAppJs,
+  cacheControlForStatic,
+  CACHE_HTML,
+  CACHE_FINGERPRINTED,
+  CACHE_WALLPAPER,
+} from '../server.js';
 import {
   formatRelativeTime,
   comparePanes,
@@ -25,9 +34,17 @@ import {
   hotkeyPayload,
   shouldConfirmBeforeSend,
   sendErrorToast,
+  shouldEmitToast,
+  TOAST_COLLAPSE_MS,
+  TOAST_DISMISS_MS,
 } from '../public/spa-utils.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Escape string for use in RegExp. */
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 describe('spa pure: formatRelativeTime', () => {
   const now = Date.parse('2026-07-19T12:00:00.000Z');
@@ -307,6 +324,43 @@ describe('spa static via bridge', () => {
     assert.match(util.headers.get('content-type') || '', /javascript/);
   });
 
+  it('Cache-Control: index no-store; fingerprinted assets immutable long-cache', async () => {
+    const html = await fetch(`${base}/herd/`);
+    assert.equal(html.status, 200);
+    assert.equal(html.headers.get('cache-control'), CACHE_HTML);
+
+    for (const name of ['app.js', 'style.css', 'spa-utils.js']) {
+      const res = await fetch(`${base}/herd/${name}`);
+      assert.equal(res.status, 200, name);
+      assert.equal(
+        res.headers.get('cache-control'),
+        CACHE_FINGERPRINTED,
+        name
+      );
+    }
+  });
+
+  it('served index.html rewrites asset refs with ?v= version query', async () => {
+    const res = await fetch(`${base}/herd/`);
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    const ver = srv.assetVersion;
+    assert.ok(ver, 'server exposes assetVersion');
+    assert.match(body, new RegExp(`style\\.css\\?v=${escapeRe(ver)}`));
+    assert.match(body, new RegExp(`app\\.js\\?v=${escapeRe(ver)}`));
+    // version query must be present (not bare ./app.js)
+    assert.doesNotMatch(body, /src=["']\.\/app\.js["']/);
+    assert.doesNotMatch(body, /href=["']\.\/style\.css["']/);
+  });
+
+  it('served app.js rewrites spa-utils import with ?v=', async () => {
+    const res = await fetch(`${base}/herd/app.js`);
+    assert.equal(res.status, 200);
+    const body = await res.text();
+    const ver = srv.assetVersion;
+    assert.match(body, new RegExp(`spa-utils\\.js\\?v=${escapeRe(ver)}`));
+  });
+
   it('GET /herd/api/state includes herdr_version and readonly', async () => {
     let body;
     for (let i = 0; i < 30; i++) {
@@ -395,5 +449,68 @@ describe('spa state readonly flag (PT2_READONLY)', () => {
       await srv.close();
       await fs.rm(stateDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('shouldEmitToast (collapse identical text within 3s)', () => {
+  it('shows first toast and collapses identical within window', () => {
+    const t0 = 1_000_000;
+    const a = shouldEmitToast('发送过快，请稍后再试', null, t0);
+    assert.equal(a.show, true);
+    assert.deepEqual(a.last, { text: '发送过快，请稍后再试', at: t0 });
+
+    const b = shouldEmitToast('发送过快，请稍后再试', a.last, t0 + 500);
+    assert.equal(b.show, false);
+    assert.equal(b.last, a.last);
+
+    const c = shouldEmitToast('发送过快，请稍后再试', a.last, t0 + TOAST_COLLAPSE_MS - 1);
+    assert.equal(c.show, false);
+
+    const d = shouldEmitToast('发送过快，请稍后再试', a.last, t0 + TOAST_COLLAPSE_MS);
+    assert.equal(d.show, true);
+    assert.equal(d.last.at, t0 + TOAST_COLLAPSE_MS);
+  });
+
+  it('allows different text immediately', () => {
+    const t0 = 2_000_000;
+    const a = shouldEmitToast('A', null, t0);
+    const b = shouldEmitToast('B', a.last, t0 + 10);
+    assert.equal(b.show, true);
+    assert.equal(b.last.text, 'B');
+  });
+
+  it('dismiss constant is 4s', () => {
+    assert.equal(TOAST_DISMISS_MS, 4000);
+    assert.equal(TOAST_COLLAPSE_MS, 3000);
+  });
+});
+
+describe('static cache helpers (pure)', () => {
+  it('createAssetVersion joins pkg + boot ms', () => {
+    assert.equal(createAssetVersion('0.2.0', 12345), '0.2.0.12345');
+  });
+
+  it('cacheControlForStatic maps route types', () => {
+    assert.equal(cacheControlForStatic('index.html'), CACHE_HTML);
+    assert.equal(cacheControlForStatic('app.js'), CACHE_FINGERPRINTED);
+    assert.equal(cacheControlForStatic('style.css'), CACHE_FINGERPRINTED);
+    assert.equal(cacheControlForStatic('spa-utils.js'), CACHE_FINGERPRINTED);
+    assert.equal(cacheControlForStatic('favicon.ico'), null);
+    assert.equal(CACHE_WALLPAPER, 'public, max-age=86400');
+  });
+
+  it('injectAssetVersionInHtml appends ?v=', () => {
+    const html =
+      '<link rel="stylesheet" href="./style.css" />\n' +
+      '<script type="module" src="./app.js"></script>';
+    const out = injectAssetVersionInHtml(html, '0.2.0.99');
+    assert.match(out, /style\.css\?v=0\.2\.0\.99/);
+    assert.match(out, /app\.js\?v=0\.2\.0\.99/);
+  });
+
+  it('injectAssetVersionInAppJs rewrites spa-utils import', () => {
+    const js = `from './spa-utils.js';\n`;
+    const out = injectAssetVersionInAppJs(js, '0.2.0.99');
+    assert.equal(out, `from './spa-utils.js?v=0.2.0.99';\n`);
   });
 });
