@@ -1179,20 +1179,19 @@ function renderChatList() {
         'aria-hidden': 'true',
       })
     );
-    // Chinese status under avatar = primary signal (was floating banner text);
-    // status-dot stays as color assist. Summary stays in row-main mid column.
-    const avatarCol = el('div', { className: 'row-avatar-col' }, [
-      avatar,
-      el('span', {
-        className: `row-status-label ${st.cls}`,
-        text: statusLabel(p.agent_status),
-        'aria-label': st.label,
-      }),
-    ]);
-    const summary = el('div', {
-      className: 'row-summary',
-      text: p.summary || '暂无摘要',
-    });
+    // Keep the status reminder inline with the latest summary, matching the
+    // earlier compact list treatment while retaining the avatar status dot.
+    const summary = el('div', { className: 'row-summary' });
+    if (p.agent_status === 'blocked') {
+      summary.append(
+        el('span', { className: 'row-badge blocked', text: '[等你回复]' })
+      );
+    } else if (p.agent_status === 'working') {
+      summary.append(
+        el('span', { className: 'row-badge working', text: '[进行中]' })
+      );
+    }
+    summary.append(document.createTextNode(p.summary || '暂无摘要'));
     const main = el('div', { className: 'row-main' }, [
       el('div', { className: 'row-title', text: title }),
       summary,
@@ -1205,7 +1204,7 @@ function renderChatList() {
       // done unread: blue status-dot + red unread badge
       p.unread ? el('div', { className: 'unread-dot', 'aria-label': '未读' }) : null,
     ]);
-    row.append(avatarCol, main, meta);
+    row.append(avatar, main, meta);
     root.append(row);
   }
 }

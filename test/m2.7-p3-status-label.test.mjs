@@ -43,18 +43,17 @@ describe('M2.7-P3 wiring: list left + chat header', () => {
     spaUtils = await fs.readFile(path.join(pub, 'spa-utils.js'), 'utf8');
   });
 
-  it('exports statusLabel and uses Chinese text (not english key) on list rows', () => {
+  it('keeps the chat-header status label and restores inline Chinese list badges', () => {
     assert.match(spaUtils, /export function statusLabel/);
     assert.match(appJs, /statusLabel/);
-    assert.match(appJs, /row-status-label/);
-    // Must render Chinese via statusLabel / st.label — not st.key (english micro keys)
+    assert.match(appJs, /row-badge/);
+    assert.match(appJs, /\[进行中\]/);
+    assert.match(appJs, /\[等你回复\]/);
+    assert.doesNotMatch(appJs, /row-status-label/);
+    // List badges are explicit Chinese text; the header still uses statusLabel.
     assert.match(
       appJs,
-      /row-status-label[\s\S]{0,120}statusLabel\(/
-    );
-    assert.doesNotMatch(
-      appJs,
-      /row-status-label[\s\S]{0,80}text:\s*st\.key/
+      /function updateChatHeader[\s\S]*?chat-status-label[\s\S]*?statusLabel\(/
     );
   });
 
@@ -69,13 +68,13 @@ describe('M2.7-P3 wiring: list left + chat header', () => {
     );
   });
 
-  it('CSS: label ≥12px, theme vars, working breathe; blocked uses --danger', () => {
-    assert.match(css, /\.row-status-label\s*\{[^}]*font-size:\s*12px/s);
+  it('CSS: inline badges and chat-header status remain theme-aware', () => {
+    assert.match(css, /\.row-badge\s*\{/);
+    assert.match(css, /\.row-badge\.working[\s\S]*?var\(--ok\)/);
+    assert.match(css, /\.row-badge\.blocked[\s\S]*?var\(--danger\)/);
     assert.match(css, /\.chat-status-label\s*\{[^}]*font-size:\s*12px/s);
-    assert.match(css, /\.row-status-label\.st-working[\s\S]*?var\(--ok\)/);
-    assert.match(css, /\.row-status-label\.st-blocked[\s\S]*?var\(--danger\)/);
-    assert.match(css, /\.row-status-label\.st-done[\s\S]*?var\(--blue\)/);
-    assert.match(css, /\.row-status-label\.st-idle[\s\S]*?var\(--idle\)/);
+    assert.match(css, /\.chat-status-label\.st-working[\s\S]*?var\(--ok\)/);
+    assert.match(css, /\.chat-status-label\.st-blocked[\s\S]*?var\(--danger\)/);
     assert.match(css, /@keyframes status-text-breathe/);
     // blocked left pin still present (M2.6)
     assert.match(css, /\.row\.row-blocked/);

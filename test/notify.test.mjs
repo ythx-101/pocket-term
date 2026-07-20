@@ -579,13 +579,13 @@ describe('notify: SPA wiring (static source) — M2.6 no top banner', () => {
     assert.match(css, /\.st-idle/);
     assert.match(css, /@keyframes breathe/);
     assert.match(css, /\.unread-dot/);
-    assert.match(css, /\.row-status-label/);
+    assert.match(css, /\.row-badge/);
   });
 
   it('chat list uses status dots + blocked pin class; keeps blocked-bar in chat', () => {
     assert.match(appJs, /paneRowClass\(p\)/);
     assert.match(appJs, /status-dot \$\{st\.cls\}/);
-    assert.match(appJs, /row-status-label/);
+    assert.match(appJs, /row-badge/);
     assert.match(appJs, /#blocked-bar/);
     assert.match(spaUtils, /export function paneRowClass/);
     assert.match(spaUtils, /export function statusLabel/);

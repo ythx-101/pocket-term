@@ -361,15 +361,6 @@ html.has-wallpaper .topbar {
   background: color-mix(in srgb, var(--danger) 10%, var(--bg-elev));
 }
 
-.row-avatar-col {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 0.25rem;
-  flex-shrink: 0;
-  width: 52px;
-}
-
 .avatar {
   position: relative;
   width: 48px;
@@ -434,45 +425,37 @@ html.has-wallpaper .topbar {
   background: var(--unknown);
 }
 
-/* Chinese status under avatar — primary signal; ≥12px; does not crowd summary */
-.row-status-label {
-  font-size: 12px;
-  line-height: 1.2;
+/* Compact inline status reminder, restored from the earlier list treatment. */
+.row-badge {
+  margin-right: 0.25rem;
   font-weight: 600;
-  letter-spacing: 0;
-  color: var(--fg-muted);
-  max-width: 52px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  text-align: center;
-  background: transparent;
 }
-.row-status-label.st-working,
+.row-badge.working {
+  color: var(--ok);
+}
+.row-badge.blocked {
+  color: var(--danger);
+}
 .chat-status-label.st-working {
   color: var(--ok);
   background: transparent;
   animation: status-text-breathe 1.4s ease-in-out infinite;
 }
-.row-status-label.st-blocked,
 .chat-status-label.st-blocked {
   color: var(--danger);
   background: transparent;
   animation: none;
 }
-.row-status-label.st-done,
 .chat-status-label.st-done {
   color: var(--blue);
   background: transparent;
   animation: none;
 }
-.row-status-label.st-idle,
 .chat-status-label.st-idle {
   color: var(--idle);
   background: transparent;
   animation: none;
 }
-.row-status-label.st-unknown,
 .chat-status-label.st-unknown {
   color: var(--fg-muted);
   background: transparent;
@@ -949,7 +932,7 @@ body.image-viewer-open .toast-host {
   font-size: calc(var(--fs-sm) * 0.9);
   border-radius: 999px;
   min-height: 44px;
-  padding: 0 0.75rem;
+  padding: 0 0.4rem;
   cursor: pointer;
   opacity: 0.9;
 }
