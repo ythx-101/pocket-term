@@ -102,18 +102,198 @@ run() {
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# ── Preflight ──────────────────────────────────────────────────────────
+# Resolve herdr socket path (env wins, else service-user home default).
+HERDR_SOCK="${PT2_HERDR_SOCK:-${HOME_DIR}/.config/herdr/herdr.sock}"
+
+# True if TCP HOST:PORT already has a listener (0 = free, 1 = busy).
+port_is_busy() {
+  local host="$1" port="$2"
+  # Prefer ss (iproute2); fall back to bash /dev/tcp probe.
+  if command -v ss >/dev/null 2>&1; then
+    # Match IPv4/IPv6 listen lines for the exact port.
+    if ss -H -tln 2>/dev/null | awk -v p=":${port}" '
+      {
+        # last colon-separated field of Local Address:Port is the port
+        n = split($4, a, ":");
+        if (a[n] == substr(p, 2)) { found=1; exit }
+      }
+      END { exit found ? 0 : 1 }
+    '; then
+      return 0
+    fi
+    return 1
+  fi
+  # bash /dev/tcp: successful open means something is listening.
+  if (echo >/dev/tcp/"$host"/"$port") >/dev/null 2>&1; then
+    return 0
+  fi
+  return 1
+}
+
+# PID listening on HOST:PORT, or empty if unknown/free.
+port_listener_pid() {
+  local host="$1" port="$2"
+  local line pid
+  if command -v ss >/dev/null 2>&1; then
+    line="$(ss -H -tlnp 2>/dev/null | awk -v p=":${port}" '
+      {
+        n = split($4, a, ":");
+        if (a[n] == substr(p, 2)) { print; exit }
+      }
+    ')"
+    if [[ -n "$line" ]]; then
+      # users:(("node",pid=1234,fd=26))
+      pid="$(echo "$line" | sed -n 's/.*pid=\([0-9][0-9]*\).*/\1/p' | head -1)"
+      echo "$pid"
+      return 0
+    fi
+  fi
+  if command -v fuser >/dev/null 2>&1; then
+    # fuser prints "7690/tcp:  1234"
+    pid="$(fuser "${port}/tcp" 2>/dev/null | tr -s '[:space:]' ' ' | awk '{print $NF}')"
+    echo "$pid"
+    return 0
+  fi
+  echo ""
+}
+
+# Is PID a pocket-term-2 server.js for THIS workdir?
+is_pt2_process() {
+  local pid="$1"
+  [[ -n "$pid" && -r "/proc/$pid/cmdline" ]] || return 1
+  local cmd work
+  cmd="$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)"
+  [[ "$cmd" == *server.js* ]] || return 1
+  work="$(readlink -f "$WORKDIR" 2>/dev/null || echo "$WORKDIR")"
+  # Prefer cwd match (systemd WorkingDirectory).
+  if [[ -r "/proc/$pid/cwd" ]]; then
+    local cwd
+    cwd="$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)"
+    if [[ -n "$cwd" ]]; then
+      [[ "$cwd" == "$work" ]] && return 0
+      return 1
+    fi
+  fi
+  # Fallback when cwd unreadable: cmdline must reference this workdir.
+  [[ "$cmd" == *"$work"* ]] && return 0
+  return 1
+}
+
+# systemd unit MainPID for pocket-term-2 (empty if unit missing/inactive).
+unit_main_pid() {
+  if $SYSTEM_UNIT; then
+    systemctl show -p MainPID --value pocket-term-2 2>/dev/null || true
+  elif $USER_UNIT; then
+    systemctl --user show -p MainPID --value pocket-term-2 2>/dev/null || true
+  else
+    echo ""
+  fi
+}
+
+# ── Preflight (fail-fast BEFORE any install side effects) ───────────────
+log "preflight: fail-fast checks"
+
 [[ -f "$WORKDIR/server.js" ]] || die "server.js not found in $WORKDIR"
 [[ -f "$WORKDIR/package.json" ]] || die "package.json not found in $WORKDIR"
 [[ -f "$WORKDIR/systemd/pocket-term-2.service.tmpl" ]] || die "missing systemd template"
-[[ -n "$NODE_BIN" && -x "$NODE_BIN" ]] || die "node not found (need Node >= 20)"
 
+# 1) Node present and >= 20
+[[ -n "$NODE_BIN" && -x "$NODE_BIN" ]] || die "node not found (need Node >= 20). Install Node 20+ or pass --node-bin PATH"
 NODE_VER="$("$NODE_BIN" -v 2>/dev/null | sed 's/^v//')"
 NODE_MAJOR="${NODE_VER%%.*}"
 [[ "${NODE_MAJOR:-0}" -ge 20 ]] || die "Node >= 20 required (found v${NODE_VER:-unknown})"
+log "preflight OK: node=$NODE_BIN (v$NODE_VER)"
+
+# 2) Running as the right user for the chosen unit scope
+CURRENT_UID="$(id -u)"
+CURRENT_USER="$(id -un)"
+if $SYSTEM_UNIT; then
+  [[ "$CURRENT_UID" -eq 0 ]] || die "--system requires root (run as root, or use --user-unit)"
+  # Service will run as USER_NAME; that account must exist.
+  getent passwd "$USER_NAME" >/dev/null 2>&1 \
+    || die "service user '$USER_NAME' does not exist (pass --user NAME)"
+  log "preflight OK: root installing system unit (service User=$USER_NAME)"
+elif $USER_UNIT; then
+  if [[ "$CURRENT_USER" != "$USER_NAME" ]]; then
+    # Installing another user's unit needs root or matching identity.
+    if [[ "$CURRENT_UID" -ne 0 ]]; then
+      die "user-unit install as '$CURRENT_USER' cannot target --user $USER_NAME (run as that user or as root)"
+    fi
+  fi
+  log "preflight OK: user-unit install for User=$USER_NAME (installer=$CURRENT_USER)"
+fi
+
+# 3) herdr binary/socket reachable — required; do NOT install without it
+HERDR_OK=false
+if command -v herdr >/dev/null 2>&1; then
+  if herdr status >/dev/null 2>&1; then
+    HERDR_OK=true
+    log "preflight OK: herdr status succeeded"
+  fi
+fi
+if ! $HERDR_OK; then
+  if [[ -S "$HERDR_SOCK" ]]; then
+    HERDR_OK=true
+    log "preflight OK: herdr socket present at $HERDR_SOCK"
+  fi
+fi
+if ! $HERDR_OK; then
+  die "herdr not reachable — refusing to install.
+  Need either:
+    • 'herdr' on PATH with a running server ('herdr status' ok), or
+    • Unix socket at: $HERDR_SOCK
+  Start herdr first, set PT2_HERDR_SOCK if non-default, then re-run install.
+  (Do not use --no-herdr-integ to skip this: that flag only skips Claude integration.)"
+fi
+
+# 4) Target port free (or already our pocket-term-2 — reinstall path)
+if port_is_busy "$HOST" "$PORT"; then
+  LISTENER_PID="$(port_listener_pid "$HOST" "$PORT")"
+  UNIT_PID="$(unit_main_pid)"
+  UNIT_PID="${UNIT_PID//[^0-9]/}"
+  OWN=false
+  if [[ -n "$LISTENER_PID" ]] && is_pt2_process "$LISTENER_PID"; then
+    if [[ -n "$UNIT_PID" && "$UNIT_PID" == "$LISTENER_PID" ]]; then
+      OWN=true
+    elif [[ -z "$UNIT_PID" || "$UNIT_PID" == "0" ]]; then
+      # Process looks like ours (server.js in this workdir) even if unit not loaded yet.
+      OWN=true
+    fi
+  fi
+  if $OWN; then
+    log "preflight OK: port $HOST:$PORT already held by pocket-term-2 (pid=${LISTENER_PID}) — reinstall allowed"
+  else
+    EXTRA=""
+    if [[ -n "$LISTENER_PID" ]]; then
+      EXTRA=" (pid=$LISTENER_PID: $(tr '\0' ' ' <"/proc/$LISTENER_PID/cmdline" 2>/dev/null | head -c 120))"
+    fi
+    die "target port ${HOST}:${PORT} is already in use${EXTRA}.
+  Free the port or choose another with --port / PT2_PORT.
+  Refusing to install (would falsely PASS health checks against a foreign listener)."
+  fi
+else
+  log "preflight OK: port $HOST:$PORT is free"
+fi
+
+# 5) systemd available
+command -v systemctl >/dev/null 2>&1 || die "systemctl not found — systemd is required for install"
+if $SYSTEM_UNIT; then
+  systemctl daemon-reload --dry-run >/dev/null 2>&1 \
+    || systemctl status >/dev/null 2>&1 \
+    || die "system systemd not usable (systemctl failed)"
+  log "preflight OK: systemctl (system) available"
+elif $USER_UNIT; then
+  # User bus may be unavailable in some non-login contexts; still require binary + basic show.
+  if ! systemctl --user status >/dev/null 2>&1; then
+    # Soft-fail only when XDG_RUNTIME_DIR missing is the likely cause — still hard-fail install of user unit.
+    die "systemctl --user not usable (is a user systemd session active? try loginctl enable-linger $USER_NAME)"
+  fi
+  log "preflight OK: systemctl --user available"
+fi
 
 log "workdir=$WORKDIR user=$USER_NAME home=$HOME_DIR port=$PORT host=$HOST"
-log "node=$NODE_BIN (v$NODE_VER)"
+log "node=$NODE_BIN (v$NODE_VER) herdr_sock=$HERDR_SOCK"
+log "preflight: all checks passed"
 
 # ── Dependencies ───────────────────────────────────────────────────────
 log "npm ci"
@@ -124,12 +304,14 @@ else
 fi
 
 # ── Optional herdr Claude integration (Tier A) ─────────────────────────
+# Herdr server itself was required at preflight; this only installs the
+# Claude integration helper (transcripts). Failures here are non-fatal.
 if ! $NO_HERDR_INTEG; then
   if command -v herdr >/dev/null 2>&1; then
     log "herdr integration install claude"
     run herdr integration install claude || log "WARN: herdr integration install failed (Tier A optional)"
   else
-    log "WARN: herdr not on PATH — skip integration install"
+    log "WARN: herdr CLI not on PATH — skip integration install (socket was present)"
   fi
 else
   log "skip herdr integration (--no-herdr-integ)"
@@ -262,9 +444,9 @@ else
   fi
 fi
 
-# ── Verify ─────────────────────────────────────────────────────────────
+# ── Verify (must be THIS service, not a foreign listener on the port) ──
 BASE="http://${HOST}:${PORT}"
-log "verify ${BASE}/herd/api/state"
+log "verify ${BASE}/herd/api/state (owned by pocket-term-2 unit)"
 if $DRY_RUN || $NO_START; then
   log "skip live verify (dry-run or --no-start)"
   log "PASS: install steps complete"
@@ -272,24 +454,81 @@ if $DRY_RUN || $NO_START; then
 fi
 
 ok=false
-for i in 1 2 3 4 5 6 7 8 9 10; do
-  code="$(curl -s -o /tmp/pt2-state-check.json -w '%{http_code}' --max-time 2 \
+code="000"
+body_file="/tmp/pt2-state-check.$$.json"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  # 1) Unit must be active with a MainPID
+  MAIN_PID="$("${SYSTEMCTL[@]}" show -p MainPID --value pocket-term-2 2>/dev/null || true)"
+  MAIN_PID="${MAIN_PID//[^0-9]/}"
+  ACTIVE="$("${SYSTEMCTL[@]}" is-active pocket-term-2 2>/dev/null || true)"
+  if [[ "$ACTIVE" != "active" || -z "$MAIN_PID" || "$MAIN_PID" == "0" ]]; then
+    sleep 0.5
+    continue
+  fi
+  # 2) MainPID must be our server.js
+  if ! is_pt2_process "$MAIN_PID"; then
+    sleep 0.5
+    continue
+  fi
+  # 3) MainPID (or its children) must own the listen port
+  LISTENER_PID="$(port_listener_pid "$HOST" "$PORT")"
+  if [[ -n "$LISTENER_PID" && "$LISTENER_PID" != "$MAIN_PID" ]]; then
+    # Accept if listener is in the same cgroup/process tree as MainPID
+    if [[ -r "/proc/$LISTENER_PID/stat" ]]; then
+      # Walk parent chain up to MainPID
+      walk="$LISTENER_PID"
+      owned=false
+      for _ in 1 2 3 4 5 6 7 8; do
+        [[ "$walk" == "$MAIN_PID" ]] && { owned=true; break; }
+        [[ -z "$walk" || "$walk" == "0" || "$walk" == "1" ]] && break
+        walk="$(awk '{print $4}' "/proc/$walk/stat" 2>/dev/null || true)"
+      done
+      if ! $owned; then
+        sleep 0.5
+        continue
+      fi
+    else
+      sleep 0.5
+      continue
+    fi
+  fi
+  if [[ -z "$LISTENER_PID" ]]; then
+    # Port not yet bound — wait
+    sleep 0.5
+    continue
+  fi
+  # 4) HTTP health from that listener
+  code="$(curl -s -o "$body_file" -w '%{http_code}' --max-time 2 \
     "${BASE}/herd/api/state" 2>/dev/null || echo "000")"
   if [[ "$code" == "200" ]]; then
-    ok=true
-    break
+    # Cheap ownership signal: JSON should look like our state payload.
+    if grep -qE '"panes"|"herdr"' "$body_file" 2>/dev/null; then
+      ok=true
+      break
+    fi
+    # 200 without expected keys — treat as foreign service on our port.
+    log "WARN: ${BASE}/herd/api/state → 200 but body lacks panes/herdr (not pocket-term-2?)"
   fi
   sleep 0.5
 done
 
 if $ok; then
-  log "PASS: /herd/api/state → 200"
-  head -c 200 /tmp/pt2-state-check.json 2>/dev/null || true
+  log "PASS: /herd/api/state → 200 (unit MainPID=$MAIN_PID owns ${HOST}:${PORT})"
+  head -c 200 "$body_file" 2>/dev/null || true
   echo
+  rm -f "$body_file"
   exit 0
 fi
 
-log "FAIL: /herd/api/state not healthy (last http=$code)"
+rm -f "$body_file"
+log "FAIL: /herd/api/state not healthy from this pocket-term-2 service (last http=$code)"
+log "  unit active: $("${SYSTEMCTL[@]}" is-active pocket-term-2 2>/dev/null || echo unknown)"
+log "  MainPID: $("${SYSTEMCTL[@]}" show -p MainPID --value pocket-term-2 2>/dev/null || echo unknown)"
+log "  listener: $(port_listener_pid "$HOST" "$PORT")"
 log "Check: ${SYSTEMCTL[*]} status pocket-term-2 --no-pager"
-log "Logs:  ${SYSTEMCTL[*]} journal -u pocket-term-2 -n 50  (or journalctl)"
+if $SYSTEM_UNIT; then
+  log "Logs:  journalctl -u pocket-term-2 -n 50 --no-pager"
+else
+  log "Logs:  journalctl --user -u pocket-term-2 -n 50 --no-pager"
+fi
 exit 1

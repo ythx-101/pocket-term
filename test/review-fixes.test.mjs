@@ -233,7 +233,7 @@ describe('shouldEmitTierB / no A+B duplicate', () => {
     assert.equal(
       shouldEmitTierB({
         tier: 'B',
-        transcriptPath: '/root/.claude/projects/x/y.jsonl',
+        transcriptPath: '/home/user/.claude/projects/x/y.jsonl',
       }),
       false
     );

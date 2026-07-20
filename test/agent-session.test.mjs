@@ -43,21 +43,21 @@ describe('parseAgentSession — live object shapes', () => {
         source: 'herdr:claude',
         agent: 'claude',
         kind: 'path',
-        value: '/root/.claude/projects/-root/abc.jsonl',
+        value: '/home/user/.claude/projects/-home-user/abc.jsonl',
       },
     };
     assert.deepEqual(parseAgentSession(pane), {
       kind: 'path',
-      value: '/root/.claude/projects/-root/abc.jsonl',
+      value: '/home/user/.claude/projects/-home-user/abc.jsonl',
     });
   });
 
   it('legacy string agent_session still works', () => {
     assert.deepEqual(
       parseAgentSession({
-        agent_session: '/root/.claude/projects/-root/legacy.jsonl',
+        agent_session: '/home/user/.claude/projects/-home-user/legacy.jsonl',
       }),
-      { kind: 'path', value: '/root/.claude/projects/-root/legacy.jsonl' }
+      { kind: 'path', value: '/home/user/.claude/projects/-home-user/legacy.jsonl' }
     );
   });
 

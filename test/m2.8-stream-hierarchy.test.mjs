@@ -53,7 +53,7 @@ describe('M2.8-P1 spinner: real-world lines that MUST be filtered', () => {
 describe('M2.8-P1 spinner: body lines that MUST be kept', () => {
   const bodies = [
     '● grok 还在 working（4分29秒，改了 3 个文件但还没到 commit）。',
-    '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1',
+    '  ⎿  $ git -C /home/user/project log --oneline -1',
     '● Done. All tests pass.',
     '● 修复完成',
     '* fixed the parser bug in lib/bubbles.js',
@@ -72,12 +72,12 @@ describe('M2.8-P1 spinner: body lines that MUST be kept', () => {
   it('cleanStreamLines keeps ● body rows and tool sub-rows, drops spinners', () => {
     const out = cleanStreamLines([
       '● grok 还在 working（4分29秒，改了 3 个文件但还没到 commit）。',
-      '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1',
+      '  ⎿  $ git -C /home/user/project log --oneline -1',
       '* Levitating… (1m 34s · ↓ 3.2k tokens)',
     ]);
     assert.deepEqual(out, [
       '● grok 还在 working（4分29秒，改了 3 个文件但还没到 commit）。',
-      '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1',
+      '  ⎿  $ git -C /home/user/project log --oneline -1',
     ]);
   });
 
@@ -93,7 +93,7 @@ describe('M2.8-P1 spinner: body lines that MUST be kept', () => {
 describe('M2.8-P2 chrome: TUI footer/hotkey lines that MUST be filtered', () => {
   const chrome = [
     '  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87',
-    'Sonnet 4.5 · /root/pocket-term-2 · ⎇ m2.8-stream-hierarchy · +12/-3',
+    'Sonnet 4.5 · /home/user/project · ⎇ m2.8-stream-hierarchy · +12/-3',
     '  ⏵⏵ auto mode on · 1 shell · ← for agents',
     '⏵⏵ accept edits on (shift+tab to cycle)',
     '❯',
@@ -116,7 +116,7 @@ describe('M2.8-P2 chrome: TUI footer/hotkey lines that MUST be filtered', () => 
 describe('M2.8-P2 chrome: content lines that MUST be kept', () => {
   const bodies = [
     '● grok 还在 working（4分29秒，改了 3 个文件但还没到 commit）。',
-    '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1',
+    '  ⎿  $ git -C /home/user/project log --oneline -1',
     '❯ git status',
     'git checkout master · then rebase',
     '说明：mode 字段的取值是 a · b · c 三种',
@@ -156,12 +156,12 @@ describe('M2.8-P3 segmentStreamText (pure)', () => {
   it('● starts a new body segment; ⎿ rows form a tool sub-segment', () => {
     const text = [
       '● 要点一：先跑测试',
-      '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1',
+      '  ⎿  $ git -C /home/user/project log --oneline -1',
       '● 要点二：再提交',
     ].join('\n');
     assert.deepEqual(segmentStreamText(text), [
       { type: 'body', text: '● 要点一：先跑测试' },
-      { type: 'tool', text: '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1' },
+      { type: 'tool', text: '  ⎿  $ git -C /home/user/project log --oneline -1' },
       { type: 'body', text: '● 要点二：再提交' },
     ]);
   });
@@ -579,7 +579,7 @@ describe('M2.8-fix1 review counter-examples: chrome must not eat code/prose', ()
 
   it('real chrome rows still all filtered', () => {
     assert.equal(isChromeLine('  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87'), true);
-    assert.equal(isChromeLine('Sonnet 4.5 · /root/pocket-term-2 · ⎇ m2.8-stream-hierarchy · +12/-3'), true);
+    assert.equal(isChromeLine('Sonnet 4.5 · /home/user/project · ⎇ m2.8-stream-hierarchy · +12/-3'), true);
     assert.equal(isChromeLine('pocket-term-2 · ⎇ master* · +961/-87'), true);
     assert.equal(isChromeLine('  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts'), true);
     assert.equal(isChromeLine('Shift+Tab:mode │ Ctrl+c:cancel'), true);
@@ -649,7 +649,7 @@ describe('M2.8-fix2 model footer: whole-row structural match', () => {
 
   it('real footers still filtered (structural: model/repo/⎇ single-token/diffstat)', () => {
     assert.equal(isChromeLine('  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87'), true);
-    assert.equal(isChromeLine('Sonnet 4.5 · /root/pocket-term-2 · ⎇ m2.8-stream-hierarchy · +12/-3'), true);
+    assert.equal(isChromeLine('Sonnet 4.5 · /home/user/project · ⎇ m2.8-stream-hierarchy · +12/-3'), true);
     assert.equal(isChromeLine('pocket-term-2 · ⎇ master* · +961/-87'), true);
     assert.equal(isChromeLine('Opus 4.8 · pocket-term-2 · ⎇ master*'), true);
   });
