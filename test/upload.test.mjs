@@ -17,6 +17,9 @@ import {
   buildUploadStoredName,
   writeUploadAtomic,
   handleImageUpload,
+  handleHtmlUpload,
+  parseHtmlUploadFilename,
+  HTML_UPLOAD_MAX_BYTES,
   UPLOAD_MAX_BYTES,
 } from '../server.js';
 import { isSafeWallpaperName } from '../lib/state-manager.js';
@@ -106,6 +109,40 @@ describe('pure: upload filename + magic', () => {
 
   it('isSafeWallpaperName accepts gif after M2-P1', () => {
     assert.equal(isSafeWallpaperName('a.gif'), true);
+  });
+});
+
+describe('HTML upload validation', () => {
+  it('accepts UTF-8 HTML and rejects empty/NUL/invalid UTF-8/path/oversize', async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-html-up-'));
+    try {
+      const ok = await handleHtmlUpload({
+        target: 'chat',
+        rawFilename: 'report.htm',
+        body: Buffer.from('<!doctype html><p>你好</p>', 'utf8'),
+        chatUploadDir: dir,
+        readonly: false,
+        now: new Date(2026, 0, 2, 3, 4, 5),
+      });
+      assert.equal(ok.ok, true);
+      assert.match(path.basename(ok.body.path), /-report\.htm$/);
+      assert.deepEqual(await fs.readFile(ok.body.path), Buffer.from('<!doctype html><p>你好</p>', 'utf8'));
+      assert.equal(parseHtmlUploadFilename('../evil.html').ok, false);
+      for (const [body, error] of [
+        [Buffer.alloc(0), 'empty_body'],
+        [Buffer.from([0x3c, 0, 0x3e]), 'invalid_html'],
+        [Buffer.from([0xc3, 0x28]), 'invalid_utf8'],
+        [Buffer.alloc(HTML_UPLOAD_MAX_BYTES + 1, 0x20), 'payload_too_large'],
+      ]) {
+        const result = await handleHtmlUpload({
+          target: 'chat', rawFilename: 'x.html', body, chatUploadDir: dir, readonly: false,
+        });
+        assert.equal(result.ok, false);
+        assert.equal(result.error, error);
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -290,6 +327,28 @@ describe('bridge POST /herd/api/upload HTTP', () => {
     assert.ok(!entries.some((n) => n.includes('.tmp') || n.startsWith('.upload-')));
   });
 
+  it('successful HTML chat upload stores UTF-8 document', async () => {
+    const html = Buffer.from('<!doctype html><h1>Preview</h1>', 'utf8');
+    const { res, json } = await api(base, '/herd/api/upload?target=chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'X-Filename': 'preview.html' },
+      body: html,
+    });
+    assert.equal(res.status, 200, JSON.stringify(json));
+    assert.match(path.basename(json.path), /-preview\.html$/);
+    assert.deepEqual(await fs.readFile(json.path), html);
+  });
+
+  it('rejects HTML upload over 2 MiB before storing', async () => {
+    const { res, json } = await api(base, '/herd/api/upload?target=chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/html', 'X-Filename': 'large.html' },
+      body: Buffer.alloc(HTML_UPLOAD_MAX_BYTES + 1, 0x20),
+    });
+    assert.equal(res.status, 413);
+    assert.equal(json.error, 'payload_too_large');
+  });
+
   it('successful wallpaper upload appears in list', async () => {
     const { res, json } = await api(base, '/herd/api/upload?target=wallpaper', {
       method: 'POST',
@@ -363,8 +422,8 @@ describe('bridge POST /herd/api/upload HTTP', () => {
         }
       );
       req.on('error', reject);
-      // Do not write body — server rejects on CL before needing full payload.
-      req.end();
+      // Send a small prefix; server rejects on CL before needing full payload.
+      req.end('x');
     });
     assert.equal(status.status, 413);
     assert.equal(status.json?.error, 'payload_too_large');

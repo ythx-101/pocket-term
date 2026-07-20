@@ -24,7 +24,11 @@ import {
   dimPercentToApi,
   wallpaperAssetUrl,
   fileAssetUrl,
+  parseMessageImageSegments,
+  parseMessageAttachmentSegments,
+  isChatUploadHtmlPath,
   composeImageSendText,
+  composeHtmlSendText,
   reduceAttachPreview,
   initialAttachPreview,
   DIM_SLIDER_MAX,
@@ -83,7 +87,7 @@ function el(tag, attrs = {}, children = []) {
   for (const [k, v] of Object.entries(attrs)) {
     if (k === 'className') node.className = v;
     else if (k === 'text') node.textContent = v;
-    else if (k === 'html') node.innerHTML = v;
+    // Deliberately no HTML-string attribute: all dynamic content is text/DOM.
     else if (k.startsWith('on') && typeof v === 'function') {
       node.addEventListener(k.slice(2).toLowerCase(), v);
     } else if (v === false || v == null) {
@@ -129,7 +133,7 @@ let wallpaperCatalog = [];
 /** @type {ReturnType<typeof setTimeout>|null} */
 let dimSaveTimer = null;
 let wallpaperPanelOpen = false;
-/** @type {{ path: string|null }} pending chat image attachment (M2-P2) */
+/** @type {{ path: string|null, kind?: 'image'|'html' }} pending chat attachment */
 let attachPreview = initialAttachPreview();
 /** @type {string|null} currently open fullscreen image src */
 let imageViewerSrc = null;
@@ -527,7 +531,7 @@ function renderWallpaperPanel() {
 }
 
 /**
- * Upload raw image bytes to bridge.
+ * Upload raw attachment bytes to bridge.
  * @param {'chat'|'wallpaper'} target
  * @param {File} file
  * @returns {Promise<{ path?: string, name?: string }>}
@@ -580,23 +584,32 @@ function renderAttachPreview() {
   }
   strip.classList.remove('hidden');
   strip.removeAttribute('aria-hidden');
-  const isDocument = isChatUploadDocumentPath(pathAbs);
-  const thumb = isDocument
+  const kind = attachPreview?.kind || (
+    isChatUploadDocumentPath(pathAbs) ? 'markdown' :
+      isChatUploadHtmlPath(pathAbs) ? 'html' : 'image'
+  );
+  const thumb = kind === 'markdown'
     ? el('div', {
-        className: 'attach-preview-document',
+        className: 'attach-preview-thumb attach-preview-document',
         role: 'img',
         'aria-label': `待发送 Markdown：${attachmentFilename(pathAbs)}`,
       }, [
         el('span', { className: 'bubble-document-icon', text: 'MD' }),
         el('span', { className: 'attach-preview-document-name', text: attachmentFilename(pathAbs) }),
       ])
-    : el('img', {
-        className: 'attach-preview-thumb',
-        src: fileAssetUrl(BASE, pathAbs),
-        alt: '待发送图片',
-        loading: 'lazy',
-      });
-  if (!isDocument) {
+    : kind === 'html'
+      ? el('div', {
+          className: 'attach-preview-thumb attach-preview-document',
+          role: 'img',
+          'aria-label': '待发送 HTML 文档',
+        }, [el('span', { className: 'attach-preview-document-icon', text: 'HTML' })])
+      : el('img', {
+          className: 'attach-preview-thumb',
+          src: fileAssetUrl(BASE, pathAbs),
+          alt: '待发送图片',
+          loading: 'lazy',
+        });
+  if (kind === 'image') {
     thumb.addEventListener('error', () => {
       thumb.classList.add('broken');
       thumb.removeAttribute('src');
@@ -608,7 +621,9 @@ function renderAttachPreview() {
     {
       type: 'button',
       className: 'attach-preview-remove',
-      'aria-label': isDocument ? '移除 Markdown 文档' : '移除图片',
+      'aria-label': kind === 'markdown'
+        ? '移除 Markdown 文档'
+        : kind === 'html' ? '移除 HTML 文档' : '移除图片',
       title: '移除',
       onClick: () => {
         attachPreview = reduceAttachPreview(attachPreview, { type: 'remove' });
@@ -619,7 +634,7 @@ function renderAttachPreview() {
   );
   strip.append(
     el('div', { className: 'attach-preview-item' }, [thumb, removeBtn]),
-    el('span', { className: 'attach-preview-hint', text: '配文可选，点发送发出' })
+    el('span', { className: 'attach-preview-hint', text: kind === 'markdown' ? 'Markdown 文档 · 配文可选' : kind === 'html' ? 'HTML 文档 · 配文可选' : '配文可选，点发送发出' })
   );
   updateSendButtonState();
   updateComposerStackOffset();
@@ -748,6 +763,247 @@ function documentCard(pathValue) {
   ]);
 }
 
+const PREVIEW_ALLOWED_TAGS = new Set([
+  'html',
+  'head',
+  'body',
+  'title',
+  'style',
+  'main',
+  'section',
+  'article',
+  'header',
+  'footer',
+  'nav',
+  'div',
+  'span',
+  'p',
+  'br',
+  'hr',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'strong',
+  'b',
+  'em',
+  'i',
+  'u',
+  's',
+  'small',
+  'mark',
+  'del',
+  'ins',
+  'sub',
+  'sup',
+  'code',
+  'pre',
+  'blockquote',
+  'q',
+  'ul',
+  'ol',
+  'li',
+  'dl',
+  'dt',
+  'dd',
+  'table',
+  'caption',
+  'thead',
+  'tbody',
+  'tfoot',
+  'tr',
+  'th',
+  'td',
+  'colgroup',
+  'col',
+  'figure',
+  'figcaption',
+  'picture',
+  'img',
+  'a',
+]);
+const PREVIEW_GLOBAL_ATTRS = new Set([
+  'class',
+  'id',
+  'title',
+  'lang',
+  'dir',
+  'hidden',
+  'role',
+  'tabindex',
+  'style',
+]);
+const PREVIEW_TAG_ATTRS = new Map([
+  ['style', new Set(['media'])],
+  ['img', new Set(['alt', 'width', 'height', 'loading', 'decoding', 'src'])],
+  ['a', new Set(['target'])],
+  ['th', new Set(['colspan', 'rowspan', 'scope'])],
+  ['td', new Set(['colspan', 'rowspan'])],
+  ['col', new Set(['span', 'width'])],
+]);
+const PREVIEW_DENIED_TAGS = new Set([
+  'script',
+  'noscript',
+  'meta',
+  'base',
+  'link',
+  'iframe',
+  'object',
+  'embed',
+  'form',
+  'input',
+  'button',
+  'textarea',
+  'select',
+  'option',
+  'optgroup',
+  'datalist',
+  'fieldset',
+  'output',
+  'audio',
+  'video',
+  'source',
+  'track',
+  'svg',
+  'math',
+  'canvas',
+  'template',
+]);
+const PREVIEW_DENIED_ATTRS = new Set([
+  'href',
+  'xlink:href',
+  'action',
+  'formaction',
+  'srcset',
+  'poster',
+  'cite',
+  'background',
+  'profile',
+  'manifest',
+  'ping',
+  'usemap',
+]);
+
+/** CSS accepted in a static preview; reject tokenization tricks as well. */
+function isSafePreviewCss(value) {
+  const css = String(value || '');
+  if (css.includes('\\')) return false;
+  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
+  return !/(?:url\s*\(|@import\b|expression\s*\()/i.test(withoutComments);
+}
+
+function isSafePreviewImage(value) {
+  const src = String(value || '').trim();
+  if (!/^data:/i.test(src)) return false;
+  const comma = src.indexOf(',');
+  if (comma < 0) return false;
+
+  let metadata;
+  try {
+    metadata = decodeURIComponent(src.slice(5, comma));
+  } catch {
+    return false;
+  }
+  const [rawMime, ...params] = metadata.split(';');
+  const mime = rawMime.trim().toLowerCase();
+  // SVG data can contain nested external references; keep explicit raster MIME only.
+  if (!new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']).has(mime)) {
+    return false;
+  }
+  return rawMime === rawMime.trim() && params.every((param) => param.trim() !== '');
+}
+
+/**
+ * Copy parsed HTML through explicit tag/attribute allowlists. This returns
+ * serialized nodes built by the browser, never the uploaded string itself.
+ * @param {string} html
+ * @returns {string}
+ */
+function sanitizePreviewHtml(html) {
+  const parsed = new DOMParser().parseFromString(String(html || ''), 'text/html');
+  const out = document.createElement('template');
+
+  /** @param {Node} node @param {Node} parent */
+  function copy(node, parent) {
+    if (node.nodeType === Node.TEXT_NODE) {
+      parent.append(document.createTextNode(node.nodeValue || ''));
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    const source = /** @type {Element} */ (node);
+    const tag = source.localName.toLowerCase();
+    if (PREVIEW_DENIED_TAGS.has(tag) || !PREVIEW_ALLOWED_TAGS.has(tag)) return;
+    if (tag === 'style' && !isSafePreviewCss(source.textContent || '')) return;
+    const target = document.createElement(tag);
+    for (const attr of source.attributes) {
+      const name = attr.name.toLowerCase();
+      if (PREVIEW_DENIED_ATTRS.has(name) || name.startsWith('on')) continue;
+      const allowed = PREVIEW_GLOBAL_ATTRS.has(name) || PREVIEW_TAG_ATTRS.get(tag)?.has(name);
+      if (!allowed) continue;
+      if (name === 'style' && !isSafePreviewCss(attr.value)) continue;
+      if (name === 'src' && (tag !== 'img' || !isSafePreviewImage(attr.value))) continue;
+      target.setAttribute(name, attr.value);
+    }
+    parent.append(target);
+    for (const child of source.childNodes) copy(child, target);
+  }
+
+  for (const child of parsed.documentElement.childNodes) copy(child, out.content);
+  return new XMLSerializer().serializeToString(out.content);
+}
+
+function htmlPreviewFailure(frame) {
+  if (!frame.isConnected) return;
+  frame.replaceWith(
+    el('div', {
+      className: 'bubble-html-placeholder',
+      text: 'HTML 预览无法加载',
+      role: 'status',
+    })
+  );
+}
+
+async function loadHtmlPreview(frame, absPath) {
+  try {
+    if (!isChatUploadHtmlPath(absPath)) throw new Error('preview_path');
+    const requestUrl = new URL(fileAssetUrl(BASE, absPath), location.href);
+    if (requestUrl.origin !== location.origin) throw new Error('preview_origin');
+    const response = await fetch(requestUrl.href, {
+      credentials: 'same-origin',
+      redirect: 'error',
+      headers: { Accept: 'text/html' },
+    });
+    if (!response.ok) throw new Error(`preview_http_${response.status}`);
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType && !/^text\/html(?:\s*;|$)/i.test(contentType)) {
+      throw new Error('preview_content_type');
+    }
+    const safeHtml = sanitizePreviewHtml(await response.text());
+    if (!frame.isConnected) return;
+    frame.srcdoc = safeHtml;
+    frame.removeAttribute('aria-busy');
+  } catch {
+    htmlPreviewFailure(frame);
+  }
+}
+
+/** Create an empty-sandbox iframe whose srcdoc is populated only after sanitizing. */
+function createHtmlPreviewFrame(absPath) {
+  const frame = el('iframe', {
+    className: 'bubble-html-preview',
+    title: 'HTML 文档预览',
+    sandbox: true,
+    referrerpolicy: 'no-referrer',
+    loading: 'lazy',
+    'aria-busy': true,
+  });
+  frame.addEventListener('error', () => htmlPreviewFailure(frame), { once: true });
+  void loadHtmlPreview(frame, absPath);
+  return frame;
+}
+
 /**
  * Fill a bubble with safe image/document cards + caption text.
  * @param {HTMLElement} bubble
@@ -756,12 +1012,15 @@ function documentCard(pathValue) {
  */
 function fillBubbleContent(bubble, text, opts = {}) {
   const segments = parseMessageSegments(text);
-  const hasAttachment = segments.some((s) => s.type === 'image' || s.type === 'document');
-  if (!hasAttachment) {
+  const hasImage = segments.some((s) => s.type === 'image');
+  const hasMarkdown = segments.some((s) => s.type === 'document');
+  const hasHtml = segments.some((s) => s.type === 'html');
+  if (!hasImage && !hasMarkdown && !hasHtml) {
     bubble.textContent = text || ' ';
     return;
   }
-  bubble.classList.add('has-image');
+  bubble.classList.add('has-attachment');
+  if (hasImage) bubble.classList.add('has-image');
   bubble.replaceChildren();
   for (const seg of segments) {
     if (seg.type === 'image') {
@@ -777,6 +1036,8 @@ function fillBubbleContent(bubble, text, opts = {}) {
       bubble.append(img);
     } else if (seg.type === 'document') {
       bubble.append(documentCard(seg.path));
+    } else if (seg.type === 'html') {
+      bubble.append(createHtmlPreviewFrame(seg.path));
     } else if (seg.text && seg.text.trim()) {
       bubble.append(el('div', { className: opts.mono ? 'bubble-caption mono' : 'bubble-caption', text: seg.text.trim() }));
     }
@@ -794,7 +1055,7 @@ function fillBubbleContent(bubble, text, opts = {}) {
 function fillStreamBubbleContent(bubble, vm) {
   const text = vm.text || ' ';
   const hasAttachment = parseMessageSegments(text).some(
-    (s) => s.type === 'image' || s.type === 'document'
+    (s) => s.type === 'image' || s.type === 'document' || s.type === 'html'
   );
   if (hasAttachment || !vm.segments || !vm.segments.length) {
     fillBubbleContent(bubble, text, { mono: vm.mono });
@@ -812,10 +1073,12 @@ function fillStreamBubbleContent(bubble, vm) {
 }
 
 /**
- * Chat attach flow: pick image → upload → preview strip (not path-in-input).
+ * Chat attach flow: pick image/HTML → upload → preview strip.
+ * Markdown is intentionally not accepted.
  * @param {File} file
  */
 async function handleChatImageUpload(file) {
+  const isHtml = /\.(?:html|htm)$/i.test(file?.name || '');
   const btn = /** @type {HTMLButtonElement|null} */ ($('#btn-attach'));
   if (btn) {
     btn.disabled = true;
@@ -829,28 +1092,29 @@ async function handleChatImageUpload(file) {
     attachPreview = reduceAttachPreview(attachPreview, {
       type: 'set',
       path: String(result.path),
+      kind: isHtml ? 'html' : 'image',
     });
     renderAttachPreview();
     const input = /** @type {HTMLTextAreaElement|null} */ ($('#composer-input'));
     input?.focus();
-    showToast('图片已附加', 'info');
+    showToast(isHtml ? 'HTML 文档已附加' : '图片已附加', 'info');
   } catch (err) {
     const code = /** @type {any} */ (err)?.code || err?.message;
     if (code === 'payload_too_large' || /** @type {any} */ (err)?.status === 413) {
-      showToast('图片太大（上限 10MB）', 'err');
+      showToast(isHtml ? 'HTML 太大（上限 2MB）' : '图片太大（上限 10MB）', 'err');
     } else if (code === 'readonly') {
-      showToast('只读模式，无法上传聊天图片', 'err');
+      showToast('只读模式，无法上传聊天附件', 'err');
     } else if (code === 'invalid_extension' || code === 'magic_mismatch') {
-      showToast('仅支持 jpg/png/webp/gif', 'err');
+      showToast('仅支持 jpg/png/webp/gif 或 html/htm', 'err');
     } else {
-      showToast('图片上传失败', 'err');
+      showToast(isHtml ? 'HTML 上传失败' : '图片上传失败', 'err');
     }
   } finally {
     if (btn) {
       btn.disabled = false;
       btn.classList.remove('uploading');
       btn.removeAttribute('aria-busy');
-      btn.title = '上传图片';
+      btn.title = '上传附件';
     }
   }
 }
@@ -1128,15 +1392,18 @@ async function sendToActivePane(opts) {
     showToast('当前为只读模式', 'warn');
     return;
   }
-  // Merge attach preview into outbound text (agent still sees [图片: path] form).
+  // Merge attachment into outbound text; no Markdown interpretation.
   const rawText = opts.text ?? '';
   const attachPath =
     opts.useAttach !== false && attachPreview?.path ? attachPreview.path : null;
+  const attachKind = attachPreview?.kind || (attachPath && isChatUploadHtmlPath(attachPath) ? 'html' : 'image');
   const text =
     attachPath != null
-      ? (isChatUploadDocumentPath(attachPath)
+      ? isChatUploadDocumentPath(attachPath)
         ? composeDocumentSendText(rawText, attachPath)
-        : composeImageSendText(rawText, attachPath))
+        : attachKind === 'html'
+          ? composeHtmlSendText(rawText, attachPath)
+          : composeImageSendText(rawText, attachPath)
       : rawText;
   const mode = opts.mode === 'text' ? 'text' : 'run';
   // Hotkeys / empty enter: do not require attach; skip if nothing to send.

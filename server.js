@@ -32,6 +32,10 @@ export const SEND_BODY_MAX_BYTES = 8 * 1024;
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** Max Markdown upload/read body (512 KiB). */
 export const DOCUMENT_MAX_BYTES = 512 * 1024;
+/** Max HTML document upload body (2 MiB). */
+export const HTML_UPLOAD_MAX_BYTES = 2 * 1024 * 1024;
+/** Max existing HTML file size exposed by GET /herd/api/file. */
+export const HTML_FILE_SERVE_MAX_BYTES = HTML_UPLOAD_MAX_BYTES;
 
 /** Default chat upload sink (shared with pocket-term terminal uploads). */
 export const DEFAULT_CHAT_UPLOAD_DIR = '/srv/term-uploads';
@@ -44,11 +48,18 @@ export const DEFAULT_FILE_SERVE_ROOT = '/srv/term-uploads';
 
 /** Allowed image extensions for POST /herd/api/upload. */
 export const UPLOAD_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
+/** Allowed HTML extensions for chat document uploads. */
+export const HTML_UPLOAD_EXTS = new Set(['.html', '.htm']);
 
 /** Image extensions allowed for GET /herd/api/file. */
 export const FILE_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 /** Markdown extension allowlist for chat uploads and reads. */
 export const FILE_DOCUMENT_EXTS = new Set(['.md']);
+/** HTML extensions allowed for GET /herd/api/file. */
+export const FILE_HTML_EXTS = new Set(['.html', '.htm']);
+/** Response policy for sandboxed HTML document previews. */
+export const HTML_PREVIEW_CSP =
+  "default-src 'none'; base-uri 'none'; form-action 'none'; navigate-to 'none'; frame-ancestors 'self'; sandbox; script-src 'none'; style-src 'unsafe-inline'; img-src data: blob:; media-src data: blob:; font-src 'none'; connect-src 'none'; object-src 'none'; frame-src 'none'; child-src 'none'; worker-src 'none'; manifest-src 'none'";
 
 /** Fingerprinted SPA assets: long-cache + ?v= rewrite in HTML (and app.js→spa-utils). */
 export const FINGERPRINTED_ASSETS = new Set([
@@ -72,6 +83,7 @@ const WALLPAPER_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
+  '.htm': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.mjs': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -374,28 +386,21 @@ export function magicMatchesExt(claimedExt, magicExt) {
  * @param {Set<string>} [allowedExts] extension allowlist (images by default)
  * @returns {{ ok: true, slug: string, ext: string } | { ok: false, error: string }}
  */
-export function parseUploadFilename(rawHeader, allowedExts = UPLOAD_EXTS) {
+function parseUploadFilenameForExts(rawHeader, allowed, fallbackSlug) {
   if (rawHeader == null || rawHeader === '') {
     return { ok: false, error: 'missing_filename' };
   }
   let raw = String(rawHeader);
   // Reject null bytes and absurd length before any path work.
-  if (raw.includes('\0')) {
-    return { ok: false, error: 'invalid_filename' };
-  }
-  if (raw.length > 512) {
-    return { ok: false, error: 'filename_too_long' };
-  }
+  if (raw.includes('\0')) return { ok: false, error: 'invalid_filename' };
+  if (raw.length > 512) return { ok: false, error: 'filename_too_long' };
   try {
     raw = decodeURIComponent(raw);
   } catch {
     return { ok: false, error: 'invalid_filename' };
   }
-  if (raw.includes('\0')) {
-    return { ok: false, error: 'invalid_filename' };
-  }
-  // Reject path injection / traversal; only pure basenames accepted.
-  // (Brief says "仅取 basename" — we require the client already sent a basename.)
+  if (raw.includes('\0')) return { ok: false, error: 'invalid_filename' };
+  // Only pure basenames are accepted; never let a client choose directories.
   if (
     raw.includes('/') ||
     raw.includes('\\') ||
@@ -406,21 +411,25 @@ export function parseUploadFilename(rawHeader, allowedExts = UPLOAD_EXTS) {
     return { ok: false, error: 'invalid_filename' };
   }
   const base = path.basename(raw);
-  if (base !== raw || !base) {
-    return { ok: false, error: 'invalid_filename' };
-  }
+  if (base !== raw || !base) return { ok: false, error: 'invalid_filename' };
   const ext = path.extname(base).toLowerCase();
-  if (!allowedExts.has(ext)) {
-    return { ok: false, error: 'invalid_extension' };
-  }
+  if (!allowed.has(ext)) return { ok: false, error: 'invalid_extension' };
   let stem = base.slice(0, base.length - ext.length);
-  // Keep alnum / . _ - ; collapse everything else to _
   stem = stem.replace(/[^\w.\-]+/g, '_').replace(/_+/g, '_');
   stem = stem.replace(/^[._\-]+|[._\-]+$/g, '');
-  if (!stem) stem = 'image';
-  // Cap slug length (final name stays well under common NAME_MAX)
+  if (!stem) stem = fallbackSlug;
   if (stem.length > 80) stem = stem.slice(0, 80);
   return { ok: true, slug: stem, ext };
+}
+
+export function parseUploadFilename(rawHeader, allowedExts = UPLOAD_EXTS) {
+  const fallback = allowedExts === UPLOAD_EXTS ? 'image' : 'document';
+  return parseUploadFilenameForExts(rawHeader, allowedExts, fallback);
+}
+
+/** Parse a chat HTML document filename using the same basename policy as images. */
+export function parseHtmlUploadFilename(rawHeader) {
+  return parseUploadFilenameForExts(rawHeader, HTML_UPLOAD_EXTS, 'document');
 }
 
 /**
@@ -613,9 +622,12 @@ async function openContainedUpload(rootReal, fileReal) {
  * @returns {Promise<{ ok: true, buf: Buffer } | { ok: false, status: number }>}
  */
 export async function readChatUploadLimited(file, ext, rootReal) {
-  const max = FILE_DOCUMENT_EXTS.has(String(ext).toLowerCase())
+  const normalizedExt = String(ext).toLowerCase();
+  const max = FILE_DOCUMENT_EXTS.has(normalizedExt)
     ? DOCUMENT_MAX_BYTES
-    : UPLOAD_MAX_BYTES;
+    : FILE_HTML_EXTS.has(normalizedExt)
+      ? HTML_FILE_SERVE_MAX_BYTES
+      : UPLOAD_MAX_BYTES;
   let fh;
   try {
     fh = await openContainedUpload(rootReal, file);
@@ -724,6 +736,30 @@ export async function handleMarkdownUpload(opts) {
   return { ok: true, status: 200, body: { path: written.path } };
 }
 
+/** Validate and atomically store a UTF-8 HTML chat document. */
+export async function handleHtmlUpload(opts) {
+  if (opts.target !== 'chat') return { ok: false, status: 400, error: 'invalid_target' };
+  if (opts.readonly) return { ok: false, status: 403, error: 'readonly' };
+  if (!Buffer.isBuffer(opts.body) || opts.body.length === 0) {
+    return { ok: false, status: 400, error: 'empty_body' };
+  }
+  if (opts.body.length > HTML_UPLOAD_MAX_BYTES) {
+    return { ok: false, status: 413, error: 'payload_too_large' };
+  }
+  if (opts.body.includes(0)) return { ok: false, status: 400, error: 'invalid_html' };
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(opts.body);
+  } catch {
+    return { ok: false, status: 400, error: 'invalid_utf8' };
+  }
+  const parsed = parseHtmlUploadFilename(opts.rawFilename);
+  if (!parsed.ok) return { ok: false, status: 400, error: parsed.error };
+  const stored = buildUploadStoredName(parsed.slug, parsed.ext, opts.now);
+  const written = await writeUploadAtomic(opts.chatUploadDir, stored, opts.body);
+  if (!written.ok) return { ok: false, status: written.status, error: written.error };
+  return { ok: true, status: 200, body: { path: written.path } };
+}
+
 /**
  * List wallpaper images under state/wallpapers (jpg/png/webp/gif).
  * @param {string} stateDir
@@ -760,7 +796,7 @@ export async function listWallpapers(stateDir) {
 /**
  * Resolve a chat-upload file for GET /herd/api/file?path=<abs-path>.
  * Hardcoded whitelist root (default `/srv/term-uploads`); realpath must stay
- * under that tree (symlink escape → 403). Images and `.md` documents only.
+ * under that tree (symlink escape → 403). Images, Markdown, and HTML only.
  *
  * @param {string|null|undefined} rawPath absolute path from query
  * @param {string} [root] serve root (tests may override; prod = DEFAULT_FILE_SERVE_ROOT)
@@ -788,7 +824,7 @@ export async function resolveChatUploadFile(
   }
 
   const ext = path.extname(raw).toLowerCase();
-  if (!FILE_IMAGE_EXTS.has(ext) && !FILE_DOCUMENT_EXTS.has(ext)) {
+  if (!FILE_IMAGE_EXTS.has(ext) && !FILE_DOCUMENT_EXTS.has(ext) && !FILE_HTML_EXTS.has(ext)) {
     return { ok: false, status: 403 };
   }
 
@@ -820,7 +856,7 @@ export async function resolveChatUploadFile(
   }
 
   const realExt = path.extname(realFile).toLowerCase();
-  if (!FILE_IMAGE_EXTS.has(realExt) && !FILE_DOCUMENT_EXTS.has(realExt)) {
+  if (!FILE_IMAGE_EXTS.has(realExt) && !FILE_DOCUMENT_EXTS.has(realExt) && !FILE_HTML_EXTS.has(realExt)) {
     return { ok: false, status: 403 };
   }
 
@@ -828,6 +864,9 @@ export async function resolveChatUploadFile(
     const st = await fs.stat(realFile);
     if (!st.isFile()) return { ok: false, status: 404 };
     if (FILE_DOCUMENT_EXTS.has(realExt) && st.size > DOCUMENT_MAX_BYTES) {
+      return { ok: false, status: 413 };
+    }
+    if (FILE_HTML_EXTS.has(realExt) && st.size > HTML_FILE_SERVE_MAX_BYTES) {
       return { ok: false, status: 413 };
     }
     return { ok: true, file: realFile, ext: realExt, size: st.size, root: rootReal };
@@ -1205,6 +1244,7 @@ export async function startServer(options = {}) {
         return;
       }
       const data = read.buf;
+      const isHtml = FILE_HTML_EXTS.has(resolved.ext);
       const type = FILE_DOCUMENT_EXTS.has(resolved.ext)
         ? 'text/plain; charset=utf-8'
         : MIME[resolved.ext] || 'application/octet-stream';
@@ -1214,6 +1254,12 @@ export async function startServer(options = {}) {
         'Cache-Control': CACHE_FILE,
         'X-Content-Type-Options': 'nosniff',
       };
+      if (isHtml) {
+        const filename = path.basename(resolved.file).replace(/[\\"\r\n]/g, '_');
+        headers['Content-Disposition'] = `inline; filename="${filename}"`;
+        headers['Content-Security-Policy'] = HTML_PREVIEW_CSP;
+        headers['Referrer-Policy'] = 'no-referrer';
+      }
       res.writeHead(200, headers);
       if (method === 'HEAD') res.end();
       else res.end(data);
@@ -1231,30 +1277,28 @@ export async function startServer(options = {}) {
         sendJson(res, 400, { error: 'invalid_target' });
         return;
       }
-      // Markdown uses a tighter limit; images retain the existing 10 MiB cap.
       const rawFilename = req.headers['x-filename'];
-      const mdName = parseUploadFilename(rawFilename, FILE_DOCUMENT_EXTS);
-      const bodyLimit = mdName.ok ? DOCUMENT_MAX_BYTES : UPLOAD_MAX_BYTES;
+      let decodedFilename = String(rawFilename || '');
+      try { decodedFilename = decodeURIComponent(decodedFilename); } catch { /* parser returns invalid_filename */ }
+      const isMarkdownUpload = targetRaw === 'chat' && FILE_DOCUMENT_EXTS.has(path.extname(decodedFilename).toLowerCase());
+      const isHtmlUpload = targetRaw === 'chat' && HTML_UPLOAD_EXTS.has(path.extname(decodedFilename).toLowerCase());
+      const uploadLimit = isMarkdownUpload ? DOCUMENT_MAX_BYTES : isHtmlUpload ? HTML_UPLOAD_MAX_BYTES : UPLOAD_MAX_BYTES;
       // Content-Length early reject (also re-checked while streaming)
       const clHdr = req.headers['content-length'];
-      if (clHdr != null && Number(clHdr) > bodyLimit) {
+      if (clHdr != null && Number(clHdr) > uploadLimit) {
         req.resume();
         sendJson(res, 413, { error: 'payload_too_large' });
         return;
       }
-      const body = await readBodyBufferLimited(req, bodyLimit);
+      const body = await readBodyBufferLimited(req, uploadLimit);
       if (!body.ok) {
         sendJson(res, body.status, { error: body.error });
         return;
       }
-      const result =
-        targetRaw === 'chat' && mdName.ok
-          ? await handleMarkdownUpload({
-              rawFilename,
-              body: body.buf,
-              chatUploadDir,
-              readonly,
-            })
+      const result = isMarkdownUpload
+        ? await handleMarkdownUpload({ rawFilename, body: body.buf, chatUploadDir, readonly })
+        : isHtmlUpload
+          ? await handleHtmlUpload({ target: 'chat', rawFilename, body: body.buf, chatUploadDir, readonly })
           : await handleImageUpload({
               target: /** @type {'chat'|'wallpaper'} */ (targetRaw),
               rawFilename,

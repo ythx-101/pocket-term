@@ -5,11 +5,14 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseMessageImageSegments,
+  parseMessageAttachmentSegments,
   composeImageSendText,
+  composeHtmlSendText,
   reduceAttachPreview,
   initialAttachPreview,
   fileAssetUrl,
   isChatUploadImagePath,
+  isChatUploadHtmlPath,
 } from '../public/spa-utils.js';
 
 describe('parseMessageImageSegments', () => {
@@ -86,6 +89,33 @@ describe('parseMessageImageSegments', () => {
     assert.deepEqual(parseMessageImageSegments(null), [
       { type: 'text', text: '' },
     ]);
+  });
+});
+
+describe('HTML attachment tokens', () => {
+  it('parses HTML bracket/bare tokens but not Markdown', () => {
+    const p = '/srv/term-uploads/20260719-120000-report.html';
+    assert.deepEqual(parseMessageAttachmentSegments(`[HTML: ${p}]`), [
+      { type: 'html', path: p },
+    ]);
+    assert.deepEqual(parseMessageAttachmentSegments(`see ${p}`), [
+      { type: 'text', text: 'see ' },
+      { type: 'html', path: p },
+    ]);
+    assert.deepEqual(parseMessageAttachmentSegments('report.md'), [
+      { type: 'text', text: 'report.md' },
+    ]);
+    assert.equal(isChatUploadHtmlPath(p), true);
+    assert.equal(isChatUploadHtmlPath('/srv/term-uploads/../x.html'), false);
+  });
+
+  it('composes HTML token and preserves attachment kind state', () => {
+    const p = '/srv/term-uploads/report.htm';
+    assert.equal(composeHtmlSendText('', p), `[HTML: ${p}]`);
+    assert.equal(composeHtmlSendText('说明', p), `[HTML: ${p}] 说明`);
+    const selected = reduceAttachPreview(null, { type: 'set', path: p, kind: 'html' });
+    assert.deepEqual(selected, { path: p, kind: 'html' });
+    assert.deepEqual(reduceAttachPreview(selected, { type: 'send' }), { path: null });
   });
 });
 

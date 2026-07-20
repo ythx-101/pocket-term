@@ -108,12 +108,13 @@ describe('Markdown HTTP surface', () => {
     await srv?.close();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
-  it('serves Markdown preview assets without adding an HTML preview route', async () => {
+  it('serves Markdown and HTML preview assets without exposing arbitrary static files', async () => {
     const html = await api(base, '/herd/');
     assert.equal(html.status, 200);
     const htmlText = await html.text();
     assert.match(htmlText, /id="markdown-viewer"/);
-    assert.doesNotMatch(htmlText, /accept="[^"\n]*\.html/);
+    assert.match(htmlText, /accept="[^"\n]*\.md/);
+    assert.match(htmlText, /accept="[^"\n]*\.html/);
     const app = await api(base, '/herd/app.js');
     assert.equal(app.status, 200);
     const appText = await app.text();

@@ -706,8 +706,14 @@ html.has-wallpaper .topbar {
 }
 
 /* —— image bubbles (M2-P2 Telegram-style) —— */
-.bubble.has-image {
+.bubble.has-attachment {
   display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.4rem;
+  overflow: hidden;
+}
+.bubble.has-image {
   flex-direction: column;
   gap: 0.35rem;
   padding: 0.4rem;
@@ -756,6 +762,30 @@ html.has-wallpaper .topbar {
 .bubble-caption.mono {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   font-size: var(--fs-sm);
+}
+.bubble-html-preview,
+.bubble-html-placeholder {
+  display: block;
+  width: min(100%, 520px);
+  min-height: 180px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.bubble-html-preview {
+  height: min(52vh, 420px);
+  background: #fff;
+  color-scheme: light;
+}
+.bubble-html-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 180px;
+  padding: 0.75rem;
+  color: var(--fg-muted);
+  background: color-mix(in srgb, var(--bg) 80%, #000);
+  font-size: var(--fs-sm);
+  text-align: center;
 }
 
 /* Fullscreen image viewer — above toast-host (z 40) so toasts never cover the image */
@@ -855,8 +885,12 @@ body.image-viewer-open .toast-host {
   padding: 0.35rem;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--bg);
+  background: var(--bg-elev);
   overflow: hidden;
+  color: var(--accent);
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
 }
 .attach-preview-document .bubble-document-icon { width: 28px; height: 28px; flex-basis: 28px; }
 .attach-preview-document-name {
@@ -866,6 +900,11 @@ body.image-viewer-open .toast-host {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.attach-preview-document-icon {
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0.2rem;
 }
 .attach-preview-remove {
   appearance: none;

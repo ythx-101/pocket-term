@@ -588,4 +588,41 @@ describe('static cache helpers (pure)', () => {
     const out = injectAssetVersionInAppJs(js, '0.2.0.99');
     assert.equal(out, `from './spa-utils.js?v=0.2.0.99';\n`);
   });
+
+  it('HTML preview image policy rejects encoded SVG and unknown/malformed data URLs', async () => {
+    const app = await fs.readFile(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    const start = app.indexOf('function isSafePreviewImage');
+    const end = app.indexOf('\n}\n\n/**', start) + 2;
+    assert.ok(start >= 0 && end > start, 'isSafePreviewImage must remain a standalone function');
+    const isSafePreviewImage = new Function(`return ${app.slice(start, end)}`)();
+
+    assert.equal(isSafePreviewImage('data:image/svg%2Bxml,<svg></svg>'), false);
+    assert.equal(isSafePreviewImage('data:image/svg%2bxml;base64,PHN2Zz4='), false);
+    assert.equal(isSafePreviewImage('https://example.com/image.png'), false);
+    assert.equal(isSafePreviewImage('data:image/tiff;base64,AA=='), false);
+    assert.equal(isSafePreviewImage('data:image/png%ZZ,AA=='), false);
+    assert.equal(isSafePreviewImage('data:image/png;base64,AA=='), true);
+    assert.equal(isSafePreviewImage('data:image/webp,AA=='), true);
+  });
+
+  it('HTML preview sanitizes into srcdoc and never assigns raw HTML to iframe src', async () => {
+    const app = await fs.readFile(path.join(__dirname, '..', 'public', 'app.js'), 'utf8');
+    const index = await fs.readFile(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+    assert.match(app, /function sanitizePreviewHtml/);
+    assert.match(app, /new DOMParser\(\)/);
+    assert.match(app, /frame\.srcdoc = safeHtml/);
+    assert.match(app, /redirect: 'error'/);
+    assert.doesNotMatch(app, /src:\s*fileAssetUrl\(BASE,\s*seg\.path\)/);
+    assert.match(app, /sandbox: true/);
+    assert.doesNotMatch(app, /allow-scripts|allow-same-origin/);
+    assert.match(app, /PREVIEW_DENIED_TAGS = new Set\(\[[\s\S]*'script'[\s\S]*'meta'[\s\S]*'iframe'[\s\S]*'svg'/);
+    assert.match(app, /PREVIEW_DENIED_ATTRS = new Set\(\[[\s\S]*'href'[\s\S]*'action'[\s\S]*'srcset'/);
+    assert.match(app, /name\.startsWith\('on'\)/);
+    assert.match(app, /url\\s\*\\\(|@import|expression/);
+    assert.match(app, /\^data:\/i\.test\(src\)/);
+    assert.match(app, /new Set\(\['image\/png', 'image\/jpeg', 'image\/gif', 'image\/webp'\]\)/);
+    assert.match(app, /bubble-html-placeholder/);
+    assert.doesNotMatch(app, /innerHTML/);
+    assert.match(index, /accept="image\/\*[^"\n]*\.html[^"\n]*\.htm/);
+  });
 });

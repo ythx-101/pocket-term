@@ -478,6 +478,8 @@ export function fileAssetUrl(base, absPath) {
 
 /** Image extensions recognized in message text / file endpoint. */
 export const MSG_IMAGE_EXTS = 'jpg|jpeg|png|webp|gif';
+/** HTML extensions recognized in message text / file endpoint. */
+export const MSG_HTML_EXTS = 'html|htm';
 
 /**
  * Whether a path is a serveable chat-upload image path.
@@ -493,6 +495,22 @@ export function isChatUploadImagePath(p) {
     return false;
   }
   return new RegExp(`\\.(?:${MSG_IMAGE_EXTS})$`, 'i').test(rest);
+}
+
+/** Whether a path is a serveable chat-upload HTML document path. */
+export function isChatUploadHtmlPath(p) {
+  const s = String(p || '');
+  if (!s.startsWith('/srv/term-uploads/')) return false;
+  const rest = s.slice('/srv/term-uploads/'.length);
+  if (!rest || rest.includes('/') || rest.includes('\\') || rest.includes('..')) {
+    return false;
+  }
+  return new RegExp(`\\.(?:${MSG_HTML_EXTS})$`, 'i').test(rest);
+}
+
+/** Whether a path is a supported chat-upload attachment of either kind. */
+export function isChatUploadAttachmentPath(p) {
+  return isChatUploadImagePath(p) || isChatUploadHtmlPath(p);
 }
 
 /**
@@ -563,6 +581,56 @@ export function parseMessageImageSegments(text) {
 }
 
 /**
+ * Parse image and HTML attachment tokens without interpreting Markdown or HTML.
+ * @param {string|null|undefined} text
+ * @returns {Array<{type:'text'|'image'|'html', text?:string, path?:string}>}
+ */
+export function parseMessageAttachmentSegments(text) {
+  const s = String(text ?? '');
+  if (!s) return [{ type: 'text', text: '' }];
+  const bracket = /\[(图片|HTML):\s*(\/srv\/term-uploads\/[^\]\n]+?)\]/gi;
+  const bare = new RegExp(
+    `(\\/srv\\/term-uploads\\/[^\\s\\[\\]<>"']+\\.(?:${MSG_IMAGE_EXTS}|${MSG_HTML_EXTS}))`,
+    'gi'
+  );
+  const hits = [];
+  let m;
+  while ((m = bracket.exec(s)) !== null) {
+    const kind = m[1].toLowerCase() === 'html' ? 'html' : 'image';
+    const p = m[2].trim();
+    const valid = kind === 'html' ? isChatUploadHtmlPath(p) : isChatUploadImagePath(p);
+    if (valid) hits.push({ start: m.index, end: m.index + m[0].length, path: p, kind });
+  }
+  while ((m = bare.exec(s)) !== null) {
+    const p = m[1];
+    const kind = isChatUploadHtmlPath(p) ? 'html' : isChatUploadImagePath(p) ? 'image' : null;
+    if (!kind || hits.some((h) => m.index >= h.start && m.index < h.end)) continue;
+    hits.push({ start: m.index, end: m.index + m[0].length, path: p, kind });
+  }
+  hits.sort((a, b) => a.start - b.start || a.end - b.end);
+  const clean = [];
+  for (const h of hits) {
+    if (clean.length && h.start < clean[clean.length - 1].end) continue;
+    clean.push(h);
+  }
+  if (!clean.length) return [{ type: 'text', text: s }];
+  const segments = [];
+  let cursor = 0;
+  for (const h of clean) {
+    if (h.start > cursor) segments.push({ type: 'text', text: s.slice(cursor, h.start) });
+    segments.push({ type: h.kind, path: h.path });
+    cursor = h.end;
+  }
+  if (cursor < s.length) segments.push({ type: 'text', text: s.slice(cursor) });
+  return segments;
+}
+
+/** Alias kept explicit for callers that only need HTML token parsing. */
+export function parseMessageHtmlSegments(text) {
+  return parseMessageAttachmentSegments(text);
+}
+
+/**
  * Build send payload text from optional attach path + caption.
  * Agent-compatible form: `[图片: <path>] <caption>`.
  *
@@ -580,11 +648,22 @@ export function composeImageSendText(caption, imagePath) {
   return `${token} ${trimmed}`;
 }
 
+/** Build the agent-compatible HTML attachment token. */
+export function composeHtmlSendText(caption, htmlPath) {
+  const pathAbs = htmlPath != null && String(htmlPath) ? String(htmlPath) : '';
+  const cap = caption != null ? String(caption) : '';
+  if (!pathAbs) return cap;
+  const token = `[HTML: ${pathAbs}]`;
+  const trimmed = cap.trim();
+  if (!trimmed) return token;
+  return `${token} ${trimmed}`;
+}
+
 /**
  * Attach preview strip state machine (select / remove / send-clear).
- * @typedef {{ path: string|null }} AttachPreviewState
+ * @typedef {{ path: string|null, kind?: 'image'|'html' }} AttachPreviewState
  * @typedef {
- *   | { type: 'set', path: string }
+ *   | { type: 'set', path: string, kind?: 'image'|'html' }
  *   | { type: 'remove' }
  *   | { type: 'clear' }
  *   | { type: 'send' }
@@ -600,7 +679,8 @@ export function reduceAttachPreview(state, action) {
   if (t === 'set') {
     const p = action.path != null ? String(action.path) : '';
     if (!p) return { path: null };
-    return { path: p };
+    const kind = action.kind === 'html' ? 'html' : action.kind === 'image' ? 'image' : undefined;
+    return kind ? { path: p, kind } : { path: p };
   }
   if (t === 'remove' || t === 'clear' || t === 'send') {
     return { path: null };

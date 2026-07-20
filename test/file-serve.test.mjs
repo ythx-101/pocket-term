@@ -11,9 +11,13 @@ import http from 'node:http';
 import {
   startServer,
   resolveChatUploadFile,
+  readChatUploadLimited,
   DEFAULT_FILE_SERVE_ROOT,
   CACHE_FILE,
   FILE_IMAGE_EXTS,
+  FILE_HTML_EXTS,
+  HTML_PREVIEW_CSP,
+  HTML_FILE_SERVE_MAX_BYTES,
 } from '../server.js';
 
 const JPEG_MIN = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
@@ -33,6 +37,9 @@ describe('pure: resolveChatUploadFile', () => {
     await fs.writeFile(path.join(root, 'ok.jpg'), JPEG_MIN);
     await fs.writeFile(path.join(root, 'ok.png'), PNG_MIN);
     await fs.writeFile(path.join(root, 'notes.txt'), 'not image');
+    await fs.writeFile(path.join(root, 'doc.html'), '<!doctype html><h1>safe</h1>');
+    await fs.writeFile(path.join(root, 'doc.htm'), '<p>safe</p>');
+    await fs.writeFile(path.join(root, 'too-large.html'), Buffer.alloc(HTML_FILE_SERVE_MAX_BYTES + 1));
     await fs.writeFile(path.join(outside, 'secret.jpg'), JPEG_MIN);
   });
 
@@ -64,7 +71,24 @@ describe('pure: resolveChatUploadFile', () => {
     assert.equal(r.status, 403);
   });
 
-  it('rejects non-image extension', async () => {
+  it('allows HTML extensions and rejects oversized HTML', async () => {
+    const r = await resolveChatUploadFile(path.join(root, 'doc.html'), root);
+    assert.equal(r.ok, true);
+    assert.equal(r.ext, '.html');
+    const htm = await resolveChatUploadFile(path.join(root, 'doc.htm'), root);
+    assert.equal(htm.ok, true);
+    const large = await resolveChatUploadFile(path.join(root, 'too-large.html'), root);
+    assert.equal(large.ok, false);
+    assert.equal(large.status, 413);
+  });
+
+  it('enforces the HTML byte cap again while reading the opened descriptor', async () => {
+    const read = await readChatUploadLimited(path.join(root, 'too-large.html'), '.html', root);
+    assert.equal(read.ok, false);
+    assert.equal(read.status, 413);
+  });
+
+  it('rejects non-image/non-HTML extension', async () => {
     const r = await resolveChatUploadFile(path.join(root, 'notes.txt'), root);
     assert.equal(r.ok, false);
     assert.equal(r.status, 403);
@@ -112,6 +136,9 @@ describe('pure: resolveChatUploadFile', () => {
     assert.equal(CACHE_FILE, 'public, max-age=86400');
     assert.ok(FILE_IMAGE_EXTS.has('.jpg'));
     assert.ok(FILE_IMAGE_EXTS.has('.webp'));
+    assert.ok(FILE_HTML_EXTS.has('.html'));
+    assert.match(HTML_PREVIEW_CSP, /frame-ancestors 'self'/);
+    assert.match(HTML_PREVIEW_CSP, /script-src 'none'/);
   });
 });
 
@@ -137,6 +164,9 @@ describe('HTTP GET/HEAD /herd/api/file', () => {
     await fs.writeFile(path.join(fileRoot, 'shot.jpg'), JPEG_MIN);
     await fs.writeFile(path.join(fileRoot, 'pic.png'), PNG_MIN);
     await fs.writeFile(path.join(fileRoot, 'readme.txt'), 'nope');
+    await fs.writeFile(path.join(fileRoot, 'doc.html'), '<!doctype html><h1>safe</h1>');
+    await fs.writeFile(path.join(fileRoot, 'doc.htm'), '<p>safe</p>');
+    await fs.writeFile(path.join(fileRoot, 'too-large.html'), Buffer.alloc(HTML_FILE_SERVE_MAX_BYTES + 1));
     await fs.writeFile(path.join(outside, 'secret.jpg'), JPEG_MIN);
     srv = await startServer({
       host: '127.0.0.1',
@@ -151,6 +181,39 @@ describe('HTTP GET/HEAD /herd/api/file', () => {
   after(async () => {
     if (srv) await srv.close();
     await fs.rm(stateDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('GET serves HTML with safe preview headers', async () => {
+    const abs = path.join(fileRoot, 'doc.html');
+    const res = await fetch(`${base}/herd/api/file?path=${encodeURIComponent(abs)}`);
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/html/);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(res.headers.get('content-disposition'), 'inline; filename="doc.html"');
+    assert.equal(res.headers.get('referrer-policy'), 'no-referrer');
+    const csp = res.headers.get('content-security-policy') || '';
+    assert.match(csp, /frame-ancestors 'self'/);
+    assert.match(csp, /navigate-to 'none'/);
+    assert.match(csp, /sandbox/);
+    assert.match(csp, /script-src 'none'/);
+    assert.doesNotMatch(csp, /allow-scripts/);
+    assert.equal(await res.text(), '<!doctype html><h1>safe</h1>');
+  });
+
+  it('HEAD serves HTML headers without body', async () => {
+    const abs = path.join(fileRoot, 'doc.htm');
+    const res = await fetch(`${base}/herd/api/file?path=${encodeURIComponent(abs)}`, { method: 'HEAD' });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type') || '', /text\/html/);
+    assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(res.headers.get('content-disposition'), 'inline; filename="doc.htm"');
+    assert.equal(await res.text(), '');
+  });
+
+  it('rejects oversized HTML before reading it', async () => {
+    const abs = path.join(fileRoot, 'too-large.html');
+    const res = await fetch(`${base}/herd/api/file?path=${encodeURIComponent(abs)}`);
+    assert.equal(res.status, 413);
   });
 
   it('GET serves image with content-type and cache', async () => {
