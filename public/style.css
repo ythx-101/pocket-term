@@ -691,6 +691,27 @@ html.has-wallpaper .topbar {
   text-indent: -0.55em;
   opacity: 0.92;
 }
+/* M2.8-P4: in-place "typing" status line — spinner text lives here, not in cards */
+.typing-line {
+  margin: 0.15rem 0.75rem 0.5rem;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: var(--fs-sm);
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+  animation: typing-pulse 1.8s ease-in-out infinite;
+}
+@keyframes typing-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 .bubble.tool {
   background: transparent;
   box-shadow: none;

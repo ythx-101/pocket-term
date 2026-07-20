@@ -359,3 +359,167 @@ describe('M2.8-P3 per-segment rendering (view model + DOM smoke)', () => {
     assert.match(css, /\.seg-tool\s*\{[^}]*font-size/s);
   });
 });
+
+describe('M2.8-P4 latestSpinnerLine (pure)', () => {
+  it('finds the newest spinner line even when chrome rows follow it', async () => {
+    const { latestSpinnerLine } = await import('../lib/bubbles.js');
+    const screen = [
+      '● 正在修改 lib/bubbles.js',
+      '* Levitating… (1m 34s · ↓ 3.2k tokens)',
+      '❯',
+      '  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87',
+    ].join('\n');
+    assert.equal(
+      latestSpinnerLine(screen),
+      '* Levitating… (1m 34s · ↓ 3.2k tokens)'
+    );
+  });
+
+  it('collapses runs of whitespace and drops [stop] / esc-to-interrupt chrome', async () => {
+    const { latestSpinnerLine } = await import('../lib/bubbles.js');
+    assert.equal(
+      latestSpinnerLine('⠹ Thinking… 12s                6m7s ⇣80.2k [stop]'),
+      '⠹ Thinking… 12s 6m7s ⇣80.2k'
+    );
+    assert.equal(
+      latestSpinnerLine('✹ Working… (esc to interrupt)'),
+      '✹ Working…'
+    );
+  });
+
+  it('returns null when no spinner line exists', async () => {
+    const { latestSpinnerLine } = await import('../lib/bubbles.js');
+    assert.equal(latestSpinnerLine('● 全部完成\n  ⎿  done'), null);
+    assert.equal(latestSpinnerLine(''), null);
+    assert.equal(latestSpinnerLine(null), null);
+  });
+});
+
+describe('M2.8-P4 typing indicator over SSE (bridge)', () => {
+  /** Build a manager with a controllable screen + captured SSE writes. */
+  async function makeTypingHarness() {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-m28-p4-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+    const screen = { text: '' };
+    const client = {
+      rpc: async (method) => {
+        if (method === 'pane.read') return { read: { text: screen.text } };
+        throw new Error(`unexpected ${method}`);
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    /** @type {string[]} */
+    const written = [];
+    mgr.addSseClient({ write: (s) => written.push(String(s)) });
+    const typingEvents = () =>
+      written
+        .filter((w) => w.startsWith('event: typing\n'))
+        .map((w) => JSON.parse(w.split('\ndata: ')[1]));
+    return {
+      mgr,
+      screen,
+      typingEvents,
+      cleanup: async () => {
+        await mgr.stop();
+        await fs.rm(tmp, { recursive: true, force: true });
+      },
+    };
+  }
+
+  it('spinner text goes to a typing event, not into buffer/history', async () => {
+    const h = await makeTypingHarness();
+    try {
+      const paneId = 'w9:p8';
+      const rt = h.mgr._internal.ensureRuntime(paneId);
+      h.mgr._internal.onStatus(paneId, 'working');
+      h.screen.text = '● 正在修改文件\n* Levitating… (5s · ↓ 861 tokens)\n';
+      rt.prevText = '';
+      await h.mgr._internal.ingestPaneOutput(paneId);
+
+      const evs = h.typingEvents();
+      assert.equal(evs.length, 1);
+      assert.equal(evs[0].pane_id, paneId);
+      assert.equal(evs[0].text, '* Levitating… (5s · ↓ 861 tokens)');
+
+      // spinner never lands in sealed bubbles / history
+      h.mgr._internal.sealOpen(paneId);
+      const msgs = await h.mgr.getMessages(paneId);
+      for (const m of msgs) {
+        assert.ok(!/Levitating/.test(m.text || ''), 'spinner leaked into history');
+      }
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it('updates in place on change, stays silent when unchanged', async () => {
+    const h = await makeTypingHarness();
+    try {
+      const paneId = 'w9:p8';
+      const rt = h.mgr._internal.ensureRuntime(paneId);
+      h.mgr._internal.onStatus(paneId, 'working');
+      h.screen.text = '* Levitating… (5s · ↓ 861 tokens)\n';
+      rt.prevText = '';
+      await h.mgr._internal.ingestPaneOutput(paneId);
+      await h.mgr._internal.ingestPaneOutput(paneId); // unchanged frame
+      assert.equal(h.typingEvents().length, 1, 'no duplicate for unchanged spinner');
+
+      h.screen.text = '* Levitating… (7s · ↓ 900 tokens)\n';
+      await h.mgr._internal.ingestPaneOutput(paneId);
+      const evs = h.typingEvents();
+      assert.equal(evs.length, 2);
+      assert.equal(evs[1].text, '* Levitating… (7s · ↓ 900 tokens)');
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it('clears on working → idle/done', async () => {
+    const h = await makeTypingHarness();
+    try {
+      const paneId = 'w9:p8';
+      const rt = h.mgr._internal.ensureRuntime(paneId);
+      h.mgr._internal.onStatus(paneId, 'working');
+      h.screen.text = '✻ Cogitating… (31s · ↓ 1.2k tokens)\n';
+      rt.prevText = '';
+      await h.mgr._internal.ingestPaneOutput(paneId);
+      assert.equal(h.typingEvents().length, 1);
+
+      h.mgr._internal.onStatus(paneId, 'idle');
+      const evs = h.typingEvents();
+      assert.equal(evs.length, 2);
+      assert.equal(evs[1].text, null);
+    } finally {
+      await h.cleanup();
+    }
+  });
+
+  it('does not emit typing while status is not working (stale completion notes)', async () => {
+    const h = await makeTypingHarness();
+    try {
+      const paneId = 'w9:p8';
+      const rt = h.mgr._internal.ensureRuntime(paneId);
+      h.mgr._internal.onStatus(paneId, 'idle');
+      h.screen.text = '✻ Crunched for 2m 41s\n';
+      rt.prevText = '';
+      await h.mgr._internal.ingestPaneOutput(paneId);
+      assert.equal(h.typingEvents().length, 0);
+    } finally {
+      await h.cleanup();
+    }
+  });
+});
+
+describe('M2.8-P4 typing indicator (front-end smoke)', () => {
+  it('SPA listens for typing events and renders the in-place status line', async () => {
+    const appJs = await fs.readFile(path.join(pub, 'app.js'), 'utf8');
+    const html = await fs.readFile(path.join(pub, 'index.html'), 'utf8');
+    const css = await fs.readFile(path.join(pub, 'style.css'), 'utf8');
+    assert.match(appJs, /addEventListener\('typing'/);
+    assert.match(appJs, /typing-line|typingByPane/);
+    assert.match(html, /id="typing-line"/);
+    assert.match(css, /\.typing-line\s*\{[^}]*var\(--/s);
+  });
+});

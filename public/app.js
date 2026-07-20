@@ -97,6 +97,8 @@ let state = null;
 let activePaneId = null;
 /** @type {Map<string, object>} */
 const bubbleStore = new Map(); // paneId -> { items: [], oldestTs }
+// M2.8-P4: paneId -> latest spinner text ("对方正在输入" indicator, SSE-fed)
+const typingByPane = new Map();
 /** @type {EventSource|null} */
 let es = null;
 let sseAttempt = 0;
@@ -1490,6 +1492,20 @@ function updateChatHeader(paneId) {
   }
 }
 
+/**
+ * M2.8-P4: render the in-place typing indicator for the active pane.
+ * Spinner text never enters the bubble list — it lives (and updates in
+ * place) on this single status line below the newest card.
+ */
+function renderTypingLine() {
+  const line = $('#typing-line');
+  if (!line) return;
+  const text = activePaneId ? typingByPane.get(activePaneId) : null;
+  line.textContent = text || '';
+  line.classList.toggle('hidden', !text);
+  if (text && stickToBottom) scrollToBottom(true);
+}
+
 async function enterChat(paneId) {
   activePaneId = paneId;
   // Opening the pane consumes its pending notifications (M2.5).
@@ -1502,6 +1518,7 @@ async function enterChat(paneId) {
   } catch {
     renderBubbles(paneId);
   }
+  renderTypingLine();
   await postSeen(paneId);
 }
 
@@ -1551,6 +1568,15 @@ async function applyRoute() {
 function applyState(next) {
   state = next;
   if (next != null) bootFailed = false;
+  // M2.8-P4: typing indicator only lives while a pane is working.
+  if (Array.isArray(next?.panes)) {
+    for (const p of next.panes) {
+      if (p?.agent_status !== 'working' && typingByPane.has(p?.pane_id)) {
+        typingByPane.delete(p.pane_id);
+        if (p.pane_id === activePaneId) renderTypingLine();
+      }
+    }
+  }
   const herdr = next?.herdr;
   const banner = $('#banner-herdr');
   if (herdr === 'disconnected') {
@@ -1672,6 +1698,20 @@ function connectSse() {
           if (parseRoute(location.hash).name === 'chats') renderChatList();
         }
       }
+    } catch {
+      /* ignore */
+    }
+  });
+
+  // M2.8-P4: in-place typing indicator — spinner text rides its own event.
+  es.addEventListener('typing', (ev) => {
+    try {
+      const data = JSON.parse(ev.data);
+      const paneId = data?.pane_id;
+      if (!paneId) return;
+      if (data.text) typingByPane.set(paneId, String(data.text));
+      else typingByPane.delete(paneId);
+      if (paneId === activePaneId) renderTypingLine();
     } catch {
       /* ignore */
     }
