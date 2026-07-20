@@ -2,7 +2,7 @@
 
 Read-only wire notes used by `lib/herdr-client.js`.
 
-- **Endpoint**: Unix domain socket, default `/root/.config/herdr/herdr.sock` (injectable).
+- **Endpoint**: Unix domain socket, default `$HOME/.config/herdr/herdr.sock` (override with `PT2_HERDR_SOCK` or `createClient({ socketPath })`).
 - **Framing**: newline-delimited JSON. One short-lived connection per RPC request.
 - **Request**: `{"id":"<uuid>","method":"<name>","params":{...}}\n`
 - **Response**: `{"id":"...","result":{...}}` or `{"id":"...","error":{"code":"...","message":"..."}}`.

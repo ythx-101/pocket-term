@@ -1,0 +1,29 @@
+[Unit]
+Description=pocket-term-2 bridge (herdr chat SPA)
+After=network.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__WORKDIR__
+# Optional overrides (defaults: 127.0.0.1:7690, herdr sock under ~/.config/herdr):
+# Environment=PT2_HOST=127.0.0.1
+# Environment=PT2_PORT=7690
+# Environment=PT2_HERDR_SOCK=__HOME__/.config/herdr/herdr.sock
+# Environment=PT2_PROJECTS_ROOT=__HOME__/.claude/projects
+# Environment=PT2_CHAT_UPLOAD_DIR=/srv/term-uploads
+# Environment=PT2_FILE_SERVE_ROOT=/srv/term-uploads
+# EnvironmentFile=-__WORKDIR__/state/pt2.env
+Environment=HOME=__HOME__
+Environment=PATH=__NODE_PATH__
+Environment=LANG=C.UTF-8
+ExecStart=__NODE_BIN__ server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

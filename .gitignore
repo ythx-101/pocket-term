@@ -1,3 +1,5 @@
-state/
-node_modules/
+/state/
+/node_modules/
 *.log
+systemd/*.service.generated
+.private-terms.local

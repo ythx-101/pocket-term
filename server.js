@@ -924,6 +924,8 @@ export async function startServer(options = {}) {
   const manager = createStateManager({
     client,
     stateDir,
+    // undefined → lib DEFAULT_ALLOWED_ROOT (homedir/.claude/projects)
+    allowedRoot: options.allowedRoot ?? process.env.PT2_PROJECTS_ROOT ?? undefined,
     socketPath: options.socketPath,
     readonly,
     allowWrite: !readonly,

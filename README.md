@@ -2,7 +2,7 @@
 
 **中文** | **English** below.
 
-`pocket-term-2` 是 **pocket-term 产品线** 的第二个产品：把 [herdr](https://github.com/) agent 舰队做成微信式会话客户端——在手机上浏览会话列表、点进某个 pane 看消息气泡、看状态灯与未读，而不是再嵌一整屏共享终端。支持页内通知，并可选启用标准 Web Push。
+`pocket-term-2` 是 **pocket-term 产品线** 的第二个产品：把 [herdr](https://github.com/earendil-works/herdr) agent 舰队做成微信式会话客户端——在手机上浏览会话列表、点进某个 pane 看消息气泡、看状态灯与未读，而不是再嵌一整屏共享终端。支持页内通知，并可选启用标准 Web Push。
 
 数据主要来自 herdr Unix socket +（可选）Claude Code 会话 JSONL。Bridge 的应用状态写入限制在忽略版本控制的 `state/`；Web Push 订阅只写入 `state/push-subscriptions.json`。
 
@@ -10,9 +10,30 @@
 
 ## Product (EN)
 
-**pocket-term-2** is the second app in the **pocket-term product line**: a WeChat-style chat front-end for your herdr agent fleet. The browser talks only to a small local Node bridge; the bridge talks to `herdr.sock` with a hard-coded **read-only** method whitelist.
+**pocket-term-2** is the second app in the **pocket-term product line**: a WeChat-style chat front-end for your [herdr](https://github.com/earendil-works/herdr) agent fleet. The browser talks only to a small local Node bridge; the bridge talks to `herdr.sock` with a hard-coded **read-only** method whitelist (plus an optional directed send channel).
 
 The bridge supports guarded pane sends and optional Web Push; its emergency `PT2_READONLY` fuse remains available.
+
+---
+
+## Quick start (agent / SKILL)
+
+Agents should read **`SKILL.md`** and follow it end-to-end. Humans only decide port, public domain (if any), and whether to enable Web Push.
+
+```bash
+git clone <this-repo> pocket-term-2 && cd pocket-term-2
+# Node.js ≥ 20, herdr running with a readable Unix socket
+bash scripts/install.sh --port 7690
+# open http://127.0.0.1:7690/herd/
+```
+
+Machine-verifiable setup / verify / uninstall steps: **`AGENTS.md`**.
+
+| Script | Purpose |
+| ------ | ------- |
+| `scripts/install.sh` | Non-interactive install (npm ci, systemd unit, optional push, health check) |
+| `scripts/gen-vapid.sh` | Print VAPID key pair to stdout (never commits) |
+| `scripts/smoke.sh` | Smoke against a running instance |
 
 ---
 
@@ -53,6 +74,18 @@ Browser ──(CF Access)── reverse proxy ──► 127.0.0.1:7690  pocket-t
 
 Default bind: `PT2_HOST=127.0.0.1` `PT2_PORT=7690` (override via env).
 
+### Environment
+
+| Variable | Default | Purpose |
+| -------- | ------- | ------- |
+| `PT2_HOST` / `PT2_PORT` | `127.0.0.1` / `7690` | Listen address |
+| `PT2_HERDR_SOCK` | `$HOME/.config/herdr/herdr.sock` | herdr Unix socket |
+| `PT2_PROJECTS_ROOT` | `$HOME/.claude/projects` | Claude JSONL root (Tier A) |
+| `PT2_CHAT_UPLOAD_DIR` | `/srv/term-uploads` | Chat upload directory |
+| `PT2_FILE_SERVE_ROOT` | `/srv/term-uploads` | Image serve whitelist root |
+| `PT2_READONLY` | unset | `1` / `true` → read-only fuse |
+| `PT2_VAPID_SUBJECT` / `PUBLIC_KEY` / `PRIVATE_KEY` | unset | Web Push (all three required) |
+
 ---
 
 ## Local run
@@ -61,9 +94,11 @@ Requirements: **Node.js ≥ 20**, a running herdr server with its Unix socket.
 
 ```bash
 cd /path/to/pocket-term-2
+npm ci
 # optional:
 # export PT2_HOST=127.0.0.1 PT2_PORT=7690
-# export PT2_HERDR_SOCK=/path/to/herdr.sock
+# export PT2_HERDR_SOCK=$HOME/.config/herdr/herdr.sock
+# export PT2_PROJECTS_ROOT=$HOME/.claude/projects
 node server.js
 # open http://127.0.0.1:7690/herd/
 ```
@@ -88,7 +123,7 @@ npm test
 
 ## Optional Web Push
 
-Set `PT2_VAPID_SUBJECT`, `PT2_VAPID_PUBLIC_KEY`, and `PT2_VAPID_PRIVATE_KEY` in the deployment environment. Generate and manage these outside the repository; never commit them. Browser subscriptions are stored only in ignored `state/push-subscriptions.json`. Without all three variables, Web Push reports `push_not_configured` and the existing page banner/badge fallback continues normally.
+Set `PT2_VAPID_SUBJECT`, `PT2_VAPID_PUBLIC_KEY`, and `PT2_VAPID_PRIVATE_KEY` in the deployment environment (or via `scripts/install.sh --with-push`). Generate keys with `scripts/gen-vapid.sh`; never commit them. Browser subscriptions are stored only in ignored `state/push-subscriptions.json`. Without all three variables, Web Push reports `push_not_configured` and the existing page banner/badge fallback continues normally.
 
 The worker is served at `/herd/sw.js`, scoped to `/herd/`, and displays notifications entirely from the encrypted push payload without fetching an Access-protected API.
 
@@ -96,14 +131,12 @@ Live tests that touch herdr use **read-only** methods only (`ping`, `session.sna
 
 ---
 
-## systemd (install later — not done by the app itself)
+## systemd
 
-Unit file lives in-repo at `systemd/pocket-term-2.service`. Install on the host (example):
+Unit template: `systemd/pocket-term-2.service.tmpl` (placeholders `__WORKDIR__`, `__HOME__`, `__NODE_PATH__`, `__NODE_BIN__`, `__USER__`, `__GROUP__`). Prefer:
 
 ```bash
-sudo cp systemd/pocket-term-2.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now pocket-term-2
+bash scripts/install.sh --port 7690
 ```
 
 See `docs/ops.md` for deploy / rollback runbook.
@@ -132,6 +165,8 @@ Validate config, restart tunnel, then health-check `/herd/api/state`, existing `
 
 ---
 
-## License / lineage
+## License — MIT
+
+This project is released under the **MIT License**. See [LICENSE](./LICENSE).
 
 Part of the **pocket-term** open-source product line (pocket terminal → pocket agent fleet chat). Code and docs are written to be publishable: no hardcoded private domains, tokens, or machine-local secrets in source.
