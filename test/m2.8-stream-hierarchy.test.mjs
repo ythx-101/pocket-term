@@ -523,3 +523,113 @@ describe('M2.8-P4 typing indicator (front-end smoke)', () => {
     assert.match(css, /\.typing-line\s*\{[^}]*var\(--/s);
   });
 });
+
+describe('M2.8-fix1 review counter-examples: ASCII bullets are body, not spinner', () => {
+  const bodies = [
+    '* Tests pass…',
+    '· Build took 12s',
+    '* Completed in 12s',
+    '* Worked for 2m 41s',
+    '· waited for 3s then retried',
+    '*',
+    '·',
+  ];
+  for (const line of bodies) {
+    it(`keeps: ${JSON.stringify(line)}`, () => {
+      assert.equal(isSpinnerLine(line), false);
+    });
+  }
+
+  it('ASCII bullets still filtered with the full timing/token annotation', () => {
+    assert.equal(isSpinnerLine('* Levitating… (1m 34s · ↓ 3.2k tokens)'), true);
+    assert.equal(isSpinnerLine('· Levitating… (5s · ↓ 861 tokens)'), true);
+    assert.equal(isSpinnerLine('* Flibbertigibbeting… (12s)'), true);
+  });
+
+  it('non-ASCII rotation glyphs keep the wider heuristic', () => {
+    assert.equal(isSpinnerLine('✻ Crunched for 2m 41s'), true);
+    assert.equal(isSpinnerLine('✻ Cogitated for 31s · 1 shell still running'), true);
+    assert.equal(isSpinnerLine('✻ Thinking…'), true);
+    assert.equal(isSpinnerLine('✻'), true);
+    assert.equal(isSpinnerLine('⠹ Thinking… 12s                6m7s ⇣80.2k [stop]'), true);
+  });
+
+  it('ASCII-punctuation body variant of the ● line is kept end-to-end', () => {
+    const line = '● grok 还在 working(4分29秒,改了 3 个文件但还没到 commit)。';
+    assert.equal(isSpinnerLine(line), false);
+    assert.equal(isChromeLine(line), false);
+    assert.deepEqual(cleanStreamLines([line]), [line]);
+  });
+});
+
+describe('M2.8-fix1 review counter-examples: chrome must not eat code/prose', () => {
+  const bodies = [
+    'build output · ⎇ branch metadata',
+    'console.log("Shift+Tab:mode │ Ctrl+c:cancel")',
+    'echo hello [stop]',
+    'git commit -m "done [stop]"',
+    '❯ run 12s [stop]',
+    'Shift+Tab:mode is the toggle we ship',
+  ];
+  for (const line of bodies) {
+    it(`keeps: ${JSON.stringify(line)}`, () => {
+      assert.equal(isChromeLine(line), false);
+    });
+  }
+
+  it('real chrome rows still all filtered', () => {
+    assert.equal(isChromeLine('  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87'), true);
+    assert.equal(isChromeLine('Sonnet 4.5 · /root/pocket-term-2 · ⎇ m2.8-stream-hierarchy · +12/-3'), true);
+    assert.equal(isChromeLine('pocket-term-2 · ⎇ master* · +961/-87'), true);
+    assert.equal(isChromeLine('  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts'), true);
+    assert.equal(isChromeLine('Shift+Tab:mode │ Ctrl+c:cancel'), true);
+    assert.equal(isChromeLine('6m7s ⇣80.2k [stop]'), true);
+    assert.equal(isChromeLine('12s [stop]'), true);
+  });
+});
+
+describe('M2.8-fix1 SSE reconnect: no typing replay for new clients', () => {
+  it('a fresh SSE client receives state + heartbeat only — never a typing event', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-fix1-sse-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+    const screen = { text: '' };
+    const client = {
+      rpc: async (method) => {
+        if (method === 'pane.read') return { read: { text: screen.text } };
+        throw new Error(`unexpected ${method}`);
+      },
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    try {
+      const paneId = 'w9:p8';
+      const rt = mgr._internal.ensureRuntime(paneId);
+      mgr._internal.onStatus(paneId, 'working');
+      screen.text = '✻ Cogitating… (31s · ↓ 1.2k tokens)\n';
+      rt.prevText = '';
+      // Typing indicator is live before the second client connects.
+      await mgr._internal.ingestPaneOutput(paneId);
+      assert.equal(rt.lastTypingText, '✻ Cogitating… (31s · ↓ 1.2k tokens)');
+
+      /** @type {string[]} */
+      const written = [];
+      mgr.addSseClient({ write: (s) => written.push(String(s)) });
+      assert.ok(
+        written.some((w) => w.startsWith('event: state\n')),
+        'initial state event expected'
+      );
+      assert.ok(
+        written.some((w) => w.startsWith(':')),
+        'heartbeat comment expected'
+      );
+      assert.ok(
+        !written.some((w) => w.startsWith('event: typing')),
+        'typing must not be replayed to fresh connections'
+      );
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
