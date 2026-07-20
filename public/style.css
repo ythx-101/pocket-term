@@ -931,7 +931,8 @@ body.image-viewer-open .toast-host {
   font: inherit;
   font-size: calc(var(--fs-sm) * 0.9);
   border-radius: 999px;
-  min-height: 44px;
+  /* Compact convenience keys; primary composer controls keep 44px targets. */
+  min-height: 32px;
   padding: 0 0.4rem;
   cursor: pointer;
   opacity: 0.9;
