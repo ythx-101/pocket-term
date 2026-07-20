@@ -6,6 +6,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isSpinnerLine,
+  isChromeLine,
   cleanStreamLines,
   diffNewText,
 } from '../lib/bubbles.js';
@@ -74,5 +75,67 @@ describe('M2.8-P1 spinner: body lines that MUST be kept', () => {
     assert.equal(isSpinnerLine('⠋ running'), true);
     assert.equal(isSpinnerLine('✳ Crunching…'), true);
     assert.equal(isSpinnerLine('✦ Finishing…'), true);
+  });
+});
+
+describe('M2.8-P2 chrome: TUI footer/hotkey lines that MUST be filtered', () => {
+  const chrome = [
+    '  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87',
+    'Sonnet 4.5 · /root/pocket-term-2 · ⎇ m2.8-stream-hierarchy · +12/-3',
+    '  ⏵⏵ auto mode on · 1 shell · ← for agents',
+    '⏵⏵ accept edits on (shift+tab to cycle)',
+    '❯',
+    '  ❯  ',
+    '  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts',
+    'Shift+Tab:mode │ Ctrl+c:cancel',
+    'Allowed by auto mode classifier',
+    '  esc to interrupt',
+    '(esc to interrupt)',
+    '6m7s ⇣80.2k [stop]',
+    '12s [stop]',
+  ];
+  for (const line of chrome) {
+    it(`filters: ${JSON.stringify(line)}`, () => {
+      assert.equal(isChromeLine(line), true);
+    });
+  }
+});
+
+describe('M2.8-P2 chrome: content lines that MUST be kept', () => {
+  const bodies = [
+    '● grok 还在 working（4分29秒，改了 3 个文件但还没到 commit）。',
+    '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1',
+    '❯ git status',
+    'git checkout master · then rebase',
+    '说明：mode 字段的取值是 a · b · c 三种',
+    'stop the service before deploying',
+    '进度 12s 内完成',
+    'plain output',
+  ];
+  for (const line of bodies) {
+    it(`keeps: ${JSON.stringify(line)}`, () => {
+      assert.equal(isChromeLine(line), false);
+    });
+  }
+
+  it('cleanStreamLines drops chrome rows', () => {
+    const out = cleanStreamLines([
+      '● 修好了，测试全绿。',
+      '  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87',
+      '  ⏵⏵ auto mode on · 1 shell · ← for agents',
+      '❯',
+      '  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts',
+      'Allowed by auto mode classifier',
+    ]);
+    assert.deepEqual(out, ['● 修好了，测试全绿。']);
+  });
+
+  it('full-redraw diff treats chrome churn as noise (no new cards)', () => {
+    const body = ['● 正文要点'];
+    const prev =
+      [...body, '  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87'].join('\n') + '\n';
+    const next =
+      [...body, '  Opus 4.8 · pocket-term-2 · ⎇ master* · +963/-90'].join('\n') + '\n';
+    assert.deepEqual(diffNewText(prev, next), []);
   });
 });
