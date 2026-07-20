@@ -24,7 +24,6 @@ import {
   dimPercentToApi,
   wallpaperAssetUrl,
   fileAssetUrl,
-  parseMessageImageSegments,
   composeImageSendText,
   reduceAttachPreview,
   initialAttachPreview,
@@ -42,6 +41,17 @@ import {
   vapidKeyToBytes,
   shouldRecoverLifecycle,
 } from './spa-utils.js';
+import {
+  parseMessageSegments,
+  composeDocumentSendText,
+  isChatUploadDocumentPath,
+  attachmentFilename,
+} from './attachment-utils.js';
+import {
+  renderMarkdownDocument,
+  markdownFilename,
+  MARKDOWN_MAX_BYTES,
+} from './markdown.js';
 
 const APP_VERSION = '0.2.0';
 const LS_THEME = 'pt2-theme';
@@ -123,6 +133,8 @@ let wallpaperPanelOpen = false;
 let attachPreview = initialAttachPreview();
 /** @type {string|null} currently open fullscreen image src */
 let imageViewerSrc = null;
+/** @type {string|null} currently open Markdown document path */
+let markdownViewerPath = null;
 /** In-app notification state (M2.5): baseline + pending + debounce. */
 let notifyState = initialNotifyState();
 
@@ -568,24 +580,35 @@ function renderAttachPreview() {
   }
   strip.classList.remove('hidden');
   strip.removeAttribute('aria-hidden');
-  const src = fileAssetUrl(BASE, pathAbs);
-  const thumb = el('img', {
-    className: 'attach-preview-thumb',
-    src,
-    alt: '待发送图片',
-    loading: 'lazy',
-  });
-  thumb.addEventListener('error', () => {
-    thumb.classList.add('broken');
-    thumb.removeAttribute('src');
-    thumb.alt = '预览失败';
-  });
+  const isDocument = isChatUploadDocumentPath(pathAbs);
+  const thumb = isDocument
+    ? el('div', {
+        className: 'attach-preview-document',
+        role: 'img',
+        'aria-label': `待发送 Markdown：${attachmentFilename(pathAbs)}`,
+      }, [
+        el('span', { className: 'bubble-document-icon', text: 'MD' }),
+        el('span', { className: 'attach-preview-document-name', text: attachmentFilename(pathAbs) }),
+      ])
+    : el('img', {
+        className: 'attach-preview-thumb',
+        src: fileAssetUrl(BASE, pathAbs),
+        alt: '待发送图片',
+        loading: 'lazy',
+      });
+  if (!isDocument) {
+    thumb.addEventListener('error', () => {
+      thumb.classList.add('broken');
+      thumb.removeAttribute('src');
+      thumb.alt = '预览失败';
+    });
+  }
   const removeBtn = el(
     'button',
     {
       type: 'button',
       className: 'attach-preview-remove',
-      'aria-label': '移除图片',
+      'aria-label': isDocument ? '移除 Markdown 文档' : '移除图片',
       title: '移除',
       onClick: () => {
         attachPreview = reduceAttachPreview(attachPreview, { type: 'remove' });
@@ -656,17 +679,85 @@ function closeImageViewer(opts = {}) {
   }
 }
 
+/** Open a safe Markdown preview modal from an attachment path. */
+async function openMarkdownViewer(pathValue) {
+  if (!isChatUploadDocumentPath(pathValue)) return;
+  const viewer = $('#markdown-viewer');
+  const body = $('#markdown-viewer-body');
+  const title = $('#markdown-viewer-title');
+  const status = $('#markdown-viewer-status');
+  if (!viewer || !body || !title) return;
+  markdownViewerPath = String(pathValue);
+  const openPath = markdownViewerPath;
+  title.textContent = markdownFilename(markdownViewerPath);
+  body.replaceChildren();
+  if (status) status.textContent = '加载中…';
+  viewer.classList.remove('hidden');
+  viewer.removeAttribute('hidden');
+  document.body.classList.add('markdown-viewer-open');
+  try {
+    const res = await fetch(fileAssetUrl(BASE, markdownViewerPath), { cache: 'no-store' });
+    const length = Number(res.headers.get('content-length')) || 0;
+    if (!res.ok) throw new Error(res.status === 413 ? 'too_large' : `http_${res.status}`);
+    if (length > MARKDOWN_MAX_BYTES) throw new Error('too_large');
+    const source = await res.text();
+    if (new TextEncoder().encode(source).length > MARKDOWN_MAX_BYTES) throw new Error('too_large');
+    if (markdownViewerPath !== openPath) return;
+    renderMarkdownDocument(body, source);
+    if (status) status.textContent = 'Markdown 预览 · 原始 HTML、图片与危险链接已禁用';
+  } catch (err) {
+    if (markdownViewerPath !== openPath) return;
+    body.replaceChildren(el('p', { className: 'markdown-error', text: err?.message === 'too_large' ? '文档过大，无法预览' : '文档无法加载' }));
+    if (status) status.textContent = '加载失败';
+  }
+}
+
+function closeMarkdownViewer(opts = {}) {
+  const viewer = $('#markdown-viewer');
+  const body = $('#markdown-viewer-body');
+  if (!viewer) return;
+  const wasOpen = !!markdownViewerPath;
+  markdownViewerPath = null;
+  body?.replaceChildren();
+  viewer.classList.add('hidden');
+  viewer.setAttribute('hidden', '');
+  document.body.classList.remove('markdown-viewer-open');
+  if (wasOpen && !opts.fromPopstate) {
+    try {
+      if (history.state && history.state.pt2MarkdownViewer) history.back();
+    } catch { /* ignore */ }
+  }
+}
+
+function documentCard(pathValue) {
+  const name = attachmentFilename(pathValue);
+  return el('button', {
+    type: 'button',
+    className: 'bubble-document',
+    'aria-label': `预览 Markdown 文档 ${name}`,
+    title: name,
+    onClick: (ev) => {
+      ev.stopPropagation();
+      try { history.pushState({ pt2MarkdownViewer: true }, ''); } catch { /* ignore */ }
+      openMarkdownViewer(pathValue);
+    },
+  }, [
+    el('span', { className: 'bubble-document-icon', text: 'MD' }),
+    el('span', { className: 'bubble-document-name', text: name }),
+    el('span', { className: 'bubble-document-open', text: '预览' }),
+  ]);
+}
+
 /**
- * Fill a bubble element with Telegram-style image segments + caption text.
- * Shared by Tier A / Tier B / optimistic user bubbles via mapBubbleToView text.
+ * Fill a bubble with safe image/document cards + caption text.
  * @param {HTMLElement} bubble
  * @param {string} text
  * @param {{ mono?: boolean }} [opts]
  */
 function fillBubbleContent(bubble, text, opts = {}) {
-  const segments = parseMessageImageSegments(text);
-  const hasImage = segments.some((s) => s.type === 'image');
-  if (!hasImage) {
+  const segments = parseMessageSegments(text);
+  const hasAttachment = segments.some((s) => s.type === 'image' || s.type === 'document');
+  if (!hasAttachment) {
     bubble.textContent = text || ' ';
     return;
   }
@@ -675,49 +766,22 @@ function fillBubbleContent(bubble, text, opts = {}) {
   for (const seg of segments) {
     if (seg.type === 'image') {
       const src = fileAssetUrl(BASE, seg.path);
-      const img = el('img', {
-        className: 'bubble-img',
-        src,
-        alt: '图片',
-        loading: 'lazy',
-        decoding: 'async',
-      });
-      img.addEventListener('click', (ev) => {
-        ev.preventDefault();
-        ev.stopPropagation();
-        openImageViewer(src);
-      });
+      const img = el('img', { className: 'bubble-img', src, alt: '图片', loading: 'lazy', decoding: 'async' });
+      img.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); openImageViewer(src); });
       img.addEventListener('error', () => {
         img.classList.add('broken');
         img.removeAttribute('src');
         img.alt = '图片已清理或无法加载';
-        // Placeholder block
-        const ph = el('div', {
-          className: 'bubble-img-placeholder',
-          text: '图片无法加载',
-          title: seg.path,
-        });
-        img.replaceWith(ph);
+        img.replaceWith(el('div', { className: 'bubble-img-placeholder', text: '图片无法加载', title: seg.path }));
       });
       bubble.append(img);
-    } else {
-      const t = seg.text;
-      // Skip pure whitespace between token and caption edges unless mid-content
-      if (!t) continue;
-      // Preserve intentional caption including CJK; drop only all-whitespace
-      // segments that are just separators around image tokens.
-      if (!t.trim()) continue;
-      const caption = el('div', {
-        className: opts.mono ? 'bubble-caption mono' : 'bubble-caption',
-        text: t.trim(),
-      });
-      bubble.append(caption);
+    } else if (seg.type === 'document') {
+      bubble.append(documentCard(seg.path));
+    } else if (seg.text && seg.text.trim()) {
+      bubble.append(el('div', { className: opts.mono ? 'bubble-caption mono' : 'bubble-caption', text: seg.text.trim() }));
     }
   }
-  // If somehow only images and all text was whitespace, keep a minimal height
-  if (!bubble.childNodes.length) {
-    bubble.textContent = ' ';
-  }
+  if (!bubble.childNodes.length) bubble.textContent = ' ';
 }
 
 /**
@@ -729,10 +793,10 @@ function fillBubbleContent(bubble, text, opts = {}) {
  */
 function fillStreamBubbleContent(bubble, vm) {
   const text = vm.text || ' ';
-  const hasImage = parseMessageImageSegments(text).some(
-    (s) => s.type === 'image'
+  const hasAttachment = parseMessageSegments(text).some(
+    (s) => s.type === 'image' || s.type === 'document'
   );
-  if (hasImage || !vm.segments || !vm.segments.length) {
+  if (hasAttachment || !vm.segments || !vm.segments.length) {
     fillBubbleContent(bubble, text, { mono: vm.mono });
     return;
   }
@@ -787,6 +851,46 @@ async function handleChatImageUpload(file) {
       btn.classList.remove('uploading');
       btn.removeAttribute('aria-busy');
       btn.title = '上传图片';
+    }
+  }
+}
+
+/** Chat attach flow for Markdown documents (512 KiB server limit). */
+async function handleChatMarkdownUpload(file) {
+  const btn = /** @type {HTMLButtonElement|null} */ ($('#btn-attach'));
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('uploading');
+    btn.setAttribute('aria-busy', 'true');
+    btn.title = '上传中…';
+  }
+  try {
+    const result = await uploadImage('chat', file);
+    if (!result.path || !isChatUploadDocumentPath(String(result.path))) {
+      throw new Error('invalid_document_path');
+    }
+    attachPreview = reduceAttachPreview(attachPreview, {
+      type: 'set',
+      path: String(result.path),
+    });
+    renderAttachPreview();
+    $('#composer-input')?.focus();
+    showToast('Markdown 文档已附加', 'info');
+  } catch (err) {
+    const code = /** @type {any} */ (err)?.code || err?.message;
+    if (code === 'payload_too_large' || /** @type {any} */ (err)?.status === 413) {
+      showToast('Markdown 太大（上限 512KiB）', 'err');
+    } else if (code === 'readonly') {
+      showToast('只读模式，无法上传文档', 'err');
+    } else {
+      showToast('Markdown 上传失败', 'err');
+    }
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('uploading');
+      btn.removeAttribute('aria-busy');
+      btn.title = '上传图片或 Markdown';
     }
   }
 }
@@ -1030,7 +1134,9 @@ async function sendToActivePane(opts) {
     opts.useAttach !== false && attachPreview?.path ? attachPreview.path : null;
   const text =
     attachPath != null
-      ? composeImageSendText(rawText, attachPath)
+      ? (isChatUploadDocumentPath(attachPath)
+        ? composeDocumentSendText(rawText, attachPath)
+        : composeImageSendText(rawText, attachPath))
       : rawText;
   const mode = opts.mode === 'text' ? 'text' : 'run';
   // Hotkeys / empty enter: do not require attach; skip if nothing to send.
@@ -1856,7 +1962,7 @@ function wire() {
     if (file) handleWallpaperImageUpload(file);
   });
 
-  // Chat attach image (M2-P1 / M2-P2 preview strip)
+  // Chat attach image / Markdown document (M2-P1 / M2-P2 / MD preview)
   $('#btn-attach')?.addEventListener('click', () => {
     const input = /** @type {HTMLInputElement|null} */ ($('#attach-input'));
     input?.click();
@@ -1865,7 +1971,9 @@ function wire() {
     const input = /** @type {HTMLInputElement} */ (ev.target);
     const file = input.files && input.files[0];
     input.value = '';
-    if (file) handleChatImageUpload(file);
+    if (!file) return;
+    if (/\.md$/i.test(file.name)) handleChatMarkdownUpload(file);
+    else handleChatImageUpload(file);
   });
 
   // Fullscreen image viewer (M2-P2)
@@ -1887,14 +1995,24 @@ function wire() {
     closeImageViewer();
   });
   document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && imageViewerSrc) {
-      closeImageViewer();
-    }
+    if (ev.key !== 'Escape') return;
+    if (markdownViewerPath) closeMarkdownViewer();
+    else if (imageViewerSrc) closeImageViewer();
   });
   window.addEventListener('popstate', () => {
-    if (imageViewerSrc) {
-      closeImageViewer({ fromPopstate: true });
+    if (markdownViewerPath) closeMarkdownViewer({ fromPopstate: true });
+    if (imageViewerSrc) closeImageViewer({ fromPopstate: true });
+  });
+  const markdownViewer = $('#markdown-viewer');
+  markdownViewer?.addEventListener('click', (ev) => {
+    const target = /** @type {HTMLElement} */ (ev.target);
+    if (target.id === 'markdown-viewer' || target.id === 'markdown-viewer-close') {
+      closeMarkdownViewer();
     }
+  });
+  $('#markdown-viewer-close')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    closeMarkdownViewer();
   });
 
   // Composer: tap send only (Enter = newline; no empty keydown shell — P5)

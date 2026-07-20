@@ -46,7 +46,9 @@ Browser ──(CF Access)── reverse proxy ──► 127.0.0.1:7690  pocket-t
                                               ├─ GET  /herd/api/state
                                               ├─ GET  /herd/api/pane/:id/messages
                                               ├─ GET  /herd/api/events  (SSE)
-                                              └─ POST /herd/api/seen/:id
+                                              ├─ POST /herd/api/seen/:id
+                                              ├─ POST /herd/api/upload?target=chat (image / .md)
+                                              └─ GET  /herd/api/file?path= (image / .md)
                                               │
                                               ▼
                                          herdr.sock (read-only RPC + subscribe)
@@ -68,6 +70,8 @@ Browser ──(CF Access)── reverse proxy ──► 127.0.0.1:7690  pocket-t
 | GET | `/herd/api/pane/:id/messages?before=&limit=` | Bubble history |
 | GET | `/herd/api/events` | SSE (`state`, `bubble`, `:heartbeat`) |
 | POST | `/herd/api/seen/:id` | Mark pane seen (writes `state/last-seen.json` only) |
+| POST | `/herd/api/upload?target=chat` | Same-origin bounded image or `.md` upload; Markdown is capped at 512 KiB |
+| GET/HEAD | `/herd/api/file?path=` | Whitelisted image / `.md` retrieval under upload root; `.md` is `text/plain` |
 | GET | `/herd/api/push/vapid-public` | Web Push public key (503 when unconfigured) |
 | POST | `/herd/api/push/subscribe` | Register a same-origin browser subscription |
 | DELETE | `/herd/api/push/subscribe` | Remove a same-origin browser subscription |
@@ -82,7 +86,7 @@ Default bind: `PT2_HOST=127.0.0.1` `PT2_PORT=7690` (override via env).
 | `PT2_HERDR_SOCK` | `$HOME/.config/herdr/herdr.sock` | herdr Unix socket |
 | `PT2_PROJECTS_ROOT` | `$HOME/.claude/projects` | Claude JSONL root (Tier A) |
 | `PT2_CHAT_UPLOAD_DIR` | `/srv/term-uploads` | Chat upload directory |
-| `PT2_FILE_SERVE_ROOT` | `/srv/term-uploads` | Image serve whitelist root |
+| `PT2_FILE_SERVE_ROOT` | `/srv/term-uploads` | Image/Markdown serve whitelist root |
 | `PT2_READONLY` | unset | `1` / `true` → read-only fuse |
 | `PT2_VAPID_SUBJECT` / `PUBLIC_KEY` / `PRIVATE_KEY` | unset | Web Push (all three required) |
 

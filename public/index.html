@@ -117,8 +117,8 @@
                 type="button"
                 id="btn-attach"
                 class="attach-btn"
-                aria-label="上传图片"
-                title="上传图片"
+                aria-label="上传图片或 Markdown"
+                title="上传图片或 Markdown"
               >
                 <svg
                   class="attach-icon"
@@ -142,7 +142,7 @@
                 type="file"
                 id="attach-input"
                 class="sr-only"
-                accept="image/*"
+                accept="image/*,.md,text/markdown"
                 tabindex="-1"
                 aria-hidden="true"
               />
@@ -194,6 +194,26 @@
             ×
           </button>
           <img id="image-viewer-img" class="image-viewer-img" alt="" />
+        </div>
+        <!-- Safe Markdown-only document preview; raw HTML is never executed. -->
+        <div
+          id="markdown-viewer"
+          class="markdown-viewer hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="markdown-viewer-title"
+          hidden
+        >
+          <div class="markdown-viewer-panel">
+            <header class="markdown-viewer-header">
+              <div class="markdown-viewer-heading">
+                <strong id="markdown-viewer-title">文档.md</strong>
+                <span id="markdown-viewer-status" class="markdown-viewer-status" role="status">加载中…</span>
+              </div>
+              <button type="button" id="markdown-viewer-close" class="image-viewer-close" aria-label="关闭 Markdown 预览">×</button>
+            </header>
+            <article id="markdown-viewer-body" class="markdown-viewer-body"></article>
+          </div>
         </div>
         <footer id="readonly-bar" class="readonly-bar">
           只读模式 · 无法发送

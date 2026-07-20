@@ -79,7 +79,7 @@ bash scripts/install.sh --no-start --no-herdr-integ
 | `PT2_HERDR_SOCK` | `$HOME/.config/herdr/herdr.sock` | herdr Unix socket |
 | `PT2_PROJECTS_ROOT` | `$HOME/.claude/projects` | Claude JSONL root (Tier A) |
 | `PT2_CHAT_UPLOAD_DIR` | `/srv/term-uploads` | Chat image upload dir |
-| `PT2_FILE_SERVE_ROOT` | `/srv/term-uploads` | Image serve whitelist root |
+| `PT2_FILE_SERVE_ROOT` | `/srv/term-uploads` | Image/Markdown serve whitelist root |
 | `PT2_READONLY` | unset | `1` → emergency read-only fuse |
 | `PT2_VAPID_*` | unset | Web Push (all three required) |
 
