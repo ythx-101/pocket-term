@@ -1615,7 +1615,9 @@ body.chat-open #wallpaper {
     env(safe-area-inset-bottom, 0) env(safe-area-inset-left, 0);
 }
 .markdown-viewer.hidden { display: none; }
-body.markdown-viewer-open { overflow: hidden; }
+body.markdown-viewer-open,
+body.html-viewer-open { overflow: hidden; }
+body.html-viewer-open .toast-host { visibility: hidden; }
 .markdown-viewer-panel {
   display: flex;
   flex-direction: column;
