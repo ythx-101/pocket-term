@@ -1598,6 +1598,11 @@ body.chat-open #wallpaper {
   font-size: var(--fs-sm);
   white-space: nowrap;
 }
+.html-document-icon {
+  width: 42px;
+  flex-basis: 42px;
+  font-size: 0.58rem;
+}
 .markdown-viewer {
   position: fixed;
   inset: 0;
@@ -1640,6 +1645,23 @@ body.markdown-viewer-open { overflow: hidden; }
   padding: 1rem 1rem 2rem;
   line-height: 1.65;
   overflow-wrap: anywhere;
+}
+.html-viewer-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  padding: 0.65rem;
+  background: var(--bg);
+}
+.html-viewer-frame {
+  display: block;
+  width: 100%;
+  min-height: min(78vh, 720px);
+  flex: 1;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color-scheme: light;
 }
 .markdown-viewer-body h1,
 .markdown-viewer-body h2,

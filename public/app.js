@@ -139,6 +139,8 @@ let attachPreview = initialAttachPreview();
 let imageViewerSrc = null;
 /** @type {string|null} currently open Markdown document path */
 let markdownViewerPath = null;
+/** @type {string|null} currently open HTML document path */
+let htmlViewerPath = null;
 /** In-app notification state (M2.5): baseline + pending + debounce. */
 let notifyState = initialNotifyState();
 
@@ -763,6 +765,25 @@ function documentCard(pathValue) {
   ]);
 }
 
+function htmlDocumentCard(pathValue) {
+  const name = attachmentFilename(pathValue);
+  return el('button', {
+    type: 'button',
+    className: 'bubble-document',
+    'aria-label': `预览 HTML 文档 ${name}`,
+    title: name,
+    onClick: (ev) => {
+      ev.stopPropagation();
+      try { history.pushState({ pt2HtmlViewer: true }, ''); } catch { /* ignore */ }
+      openHtmlViewer(pathValue);
+    },
+  }, [
+    el('span', { className: 'bubble-document-icon html-document-icon', text: 'HTML' }),
+    el('span', { className: 'bubble-document-name', text: name }),
+    el('span', { className: 'bubble-document-open', text: '预览' }),
+  ]);
+}
+
 const PREVIEW_ALLOWED_TAGS = new Set([
   'html',
   'head',
@@ -990,9 +1011,9 @@ async function loadHtmlPreview(frame, absPath) {
 }
 
 /** Create an empty-sandbox iframe whose srcdoc is populated only after sanitizing. */
-function createHtmlPreviewFrame(absPath) {
+function createHtmlPreviewFrame(absPath, className = 'bubble-html-preview') {
   const frame = el('iframe', {
-    className: 'bubble-html-preview',
+    className,
     title: 'HTML 文档预览',
     sandbox: true,
     referrerpolicy: 'no-referrer',
@@ -1002,6 +1023,39 @@ function createHtmlPreviewFrame(absPath) {
   frame.addEventListener('error', () => htmlPreviewFailure(frame), { once: true });
   void loadHtmlPreview(frame, absPath);
   return frame;
+}
+
+async function openHtmlViewer(pathValue) {
+  if (!isChatUploadHtmlPath(pathValue)) return;
+  const viewer = $('#html-viewer');
+  const body = $('#html-viewer-body');
+  const title = $('#html-viewer-title');
+  const status = $('#html-viewer-status');
+  if (!viewer || !body || !title) return;
+  htmlViewerPath = String(pathValue);
+  title.textContent = attachmentFilename(htmlViewerPath);
+  body.replaceChildren(createHtmlPreviewFrame(htmlViewerPath, 'html-viewer-frame'));
+  if (status) status.textContent = 'HTML 预览 · 沙箱与白名单隔离';
+  viewer.classList.remove('hidden');
+  viewer.removeAttribute('hidden');
+  document.body.classList.add('html-viewer-open');
+}
+
+function closeHtmlViewer(opts = {}) {
+  const viewer = $('#html-viewer');
+  const body = $('#html-viewer-body');
+  if (!viewer) return;
+  const wasOpen = !!htmlViewerPath;
+  htmlViewerPath = null;
+  body?.replaceChildren();
+  viewer.classList.add('hidden');
+  viewer.setAttribute('hidden', '');
+  document.body.classList.remove('html-viewer-open');
+  if (wasOpen && !opts.fromPopstate) {
+    try {
+      if (history.state && history.state.pt2HtmlViewer) history.back();
+    } catch { /* ignore */ }
+  }
 }
 
 /**
@@ -1037,7 +1091,7 @@ function fillBubbleContent(bubble, text, opts = {}) {
     } else if (seg.type === 'document') {
       bubble.append(documentCard(seg.path));
     } else if (seg.type === 'html') {
-      bubble.append(createHtmlPreviewFrame(seg.path));
+      bubble.append(htmlDocumentCard(seg.path));
     } else if (seg.text && seg.text.trim()) {
       bubble.append(el('div', { className: opts.mono ? 'bubble-caption mono' : 'bubble-caption', text: seg.text.trim() }));
     }
@@ -2263,10 +2317,12 @@ function wire() {
   });
   document.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
-    if (markdownViewerPath) closeMarkdownViewer();
+    if (htmlViewerPath) closeHtmlViewer();
+    else if (markdownViewerPath) closeMarkdownViewer();
     else if (imageViewerSrc) closeImageViewer();
   });
   window.addEventListener('popstate', () => {
+    if (htmlViewerPath) closeHtmlViewer({ fromPopstate: true });
     if (markdownViewerPath) closeMarkdownViewer({ fromPopstate: true });
     if (imageViewerSrc) closeImageViewer({ fromPopstate: true });
   });
@@ -2280,6 +2336,17 @@ function wire() {
   $('#markdown-viewer-close')?.addEventListener('click', (ev) => {
     ev.stopPropagation();
     closeMarkdownViewer();
+  });
+  const htmlViewer = $('#html-viewer');
+  htmlViewer?.addEventListener('click', (ev) => {
+    const target = /** @type {HTMLElement} */ (ev.target);
+    if (target.id === 'html-viewer' || target.id === 'html-viewer-close') {
+      closeHtmlViewer();
+    }
+  });
+  $('#html-viewer-close')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    closeHtmlViewer();
   });
 
   // Composer: tap send only (Enter = newline; no empty keydown shell — P5)

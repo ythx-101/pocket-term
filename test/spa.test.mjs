@@ -622,7 +622,11 @@ describe('static cache helpers (pure)', () => {
     assert.match(app, /\^data:\/i\.test\(src\)/);
     assert.match(app, /new Set\(\['image\/png', 'image\/jpeg', 'image\/gif', 'image\/webp'\]\)/);
     assert.match(app, /bubble-html-placeholder/);
+    assert.match(app, /function htmlDocumentCard/);
+    assert.doesNotMatch(app, /bubble\.append\(createHtmlPreviewFrame/);
     assert.doesNotMatch(app, /innerHTML/);
     assert.match(index, /accept="image\/\*[^"\n]*\.html[^"\n]*\.htm/);
+    assert.match(index, /id="html-viewer"/);
+    assert.match(index, /id="html-viewer-body"/);
   });
 });

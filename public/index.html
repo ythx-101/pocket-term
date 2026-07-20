@@ -215,6 +215,26 @@
             <article id="markdown-viewer-body" class="markdown-viewer-body"></article>
           </div>
         </div>
+        <!-- HTML document preview opens as a sandboxed modal, not inside the message bubble. -->
+        <div
+          id="html-viewer"
+          class="markdown-viewer hidden"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="html-viewer-title"
+          hidden
+        >
+          <div class="markdown-viewer-panel">
+            <header class="markdown-viewer-header">
+              <div class="markdown-viewer-heading">
+                <strong id="html-viewer-title">文档.html</strong>
+                <span id="html-viewer-status" class="markdown-viewer-status" role="status">加载中…</span>
+              </div>
+              <button type="button" id="html-viewer-close" class="image-viewer-close" aria-label="关闭 HTML 预览">×</button>
+            </header>
+            <article id="html-viewer-body" class="html-viewer-body"></article>
+          </div>
+        </div>
         <footer id="readonly-bar" class="readonly-bar">
           只读模式 · 无法发送
         </footer>
