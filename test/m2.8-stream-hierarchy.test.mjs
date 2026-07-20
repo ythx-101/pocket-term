@@ -633,3 +633,24 @@ describe('M2.8-fix1 SSE reconnect: no typing replay for new clients', () => {
     }
   });
 });
+
+describe('M2.8-fix2 model footer: whole-row structural match', () => {
+  const bodies = [
+    'Release 2.0 notes · ⎇ feature/login metadata',
+    'build output · ⎇ branch metadata · +12/-3',
+    'Release 2.0 notes · repo · ⎇ feature/login metadata · +1/-2',
+    'the branch ⎇ master is ahead · rebase first · then push',
+  ];
+  for (const line of bodies) {
+    it(`keeps: ${JSON.stringify(line)}`, () => {
+      assert.equal(isChromeLine(line), false);
+    });
+  }
+
+  it('real footers still filtered (structural: model/repo/⎇ single-token/diffstat)', () => {
+    assert.equal(isChromeLine('  Opus 4.8 · pocket-term-2 · ⎇ master* · +961/-87'), true);
+    assert.equal(isChromeLine('Sonnet 4.5 · /root/pocket-term-2 · ⎇ m2.8-stream-hierarchy · +12/-3'), true);
+    assert.equal(isChromeLine('pocket-term-2 · ⎇ master* · +961/-87'), true);
+    assert.equal(isChromeLine('Opus 4.8 · pocket-term-2 · ⎇ master*'), true);
+  });
+});
