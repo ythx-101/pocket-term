@@ -105,6 +105,16 @@ describe('M2.8-P2 chrome: TUI footer/hotkey lines that MUST be filtered', () => 
     '(esc to interrupt)',
     '6m7s ⇣80.2k [stop]',
     '12s [stop]',
+    // Grok CLI input-frame chrome (the "两条斜杠" under chat bubbles)
+    '╰─────────────────────────── Grok 4.5 (high) · always-approve ─╯',
+    '—— Grok 4.5 (high) · always-approve ——',
+    'Grok 4.5 (high) · always-approve',
+    '  Grok 4.5 (high) · always-approve  ',
+    'Grok 4.5 (high)',
+    '│ ❯                                                            │',
+    '│ ❯ │',
+    '  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+g:send to bg  │',
+    'Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+g:send to bg',
   ];
   for (const line of chrome) {
     it(`filters: ${JSON.stringify(line)}`, () => {
@@ -123,6 +133,11 @@ describe('M2.8-P2 chrome: content lines that MUST be kept', () => {
     'stop the service before deploying',
     '进度 12s 内完成',
     'plain output',
+    // Must not eat prose that merely mentions Grok / always-approve
+    'Grok 4.5 release notes',
+    'see Grok 4.5 (high) is better than before',
+    'always-approve mode is dangerous',
+    'We use Grok for the writer pane',
   ];
   for (const line of bodies) {
     it(`keeps: ${JSON.stringify(line)}`, () => {
@@ -140,6 +155,17 @@ describe('M2.8-P2 chrome: content lines that MUST be kept', () => {
       'Allowed by auto mode classifier',
     ]);
     assert.deepEqual(out, ['● 修好了，测试全绿。']);
+  });
+
+  it('cleanStreamLines drops Grok input-frame chrome (两条斜杠)', () => {
+    const out = cleanStreamLines([
+      '● 已切到 pi。',
+      '╭──────────────────────────────────────────────────────────────╮',
+      '│ ❯                                                            │',
+      '╰─────────────────────────── Grok 4.5 (high) · always-approve ─╯',
+      '  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+g:send to bg  │',
+    ]);
+    assert.deepEqual(out, ['● 已切到 pi。']);
   });
 
   it('full-redraw diff treats chrome churn as noise (no new cards)', () => {
