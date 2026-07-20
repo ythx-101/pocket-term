@@ -19,7 +19,6 @@ import {
 } from '../server.js';
 import {
   formatRelativeTime,
-  themeChromeColor,
   comparePanes,
   sortPanes,
   mapBubbleToView,
@@ -48,16 +47,6 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 function escapeRe(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
-describe('spa pure: themeChromeColor', () => {
-  it('keeps legacy colors and uses Trae palette colors', () => {
-    assert.equal(themeChromeColor('dark'), '#232136');
-    assert.equal(themeChromeColor('light'), '#fffaf3');
-    assert.equal(themeChromeColor('trae'), '#ffffff');
-    assert.equal(themeChromeColor('trae-dark'), '#1a1d2a');
-    assert.equal(themeChromeColor('unknown'), '#232136');
-  });
-});
 
 describe('spa pure: formatRelativeTime', () => {
   const now = Date.parse('2026-07-19T12:00:00.000Z');
@@ -359,8 +348,6 @@ describe('spa static via bridge', () => {
     assert.match(html, /id="toggle-confirm-send"/);
     assert.match(html, /id="toggle-local-readonly"/);
     assert.match(html, /id="herdr-about"/);
-    assert.match(html, /data-theme-set="trae"/);
-    assert.match(html, /data-theme-set="trae-dark"/);
     assert.match(html, /app\.js/);
     assert.match(html, /style\.css/);
   });
@@ -396,9 +383,6 @@ describe('spa static via bridge', () => {
     assert.match(css, /\.attach-btn[\s\S]*border:\s*none/);
     assert.match(css, /\.hotkey-bar[\s\S]*opacity:\s*0\.72/);
     assert.match(css, /\.hotkey-btn[\s\S]*padding:\s*0 0\.4rem/);
-    assert.match(css, /\[data-theme='trae'\][\s\S]*--accent:\s*#4e42d2/);
-    assert.match(css, /\[data-theme='trae-dark'\][\s\S]*--accent:\s*#8b85f0/);
-    assert.match(css, /radial-gradient\(var\(--dot-grid\)/);
   });
 
   it('static assets have correct Content-Type', async () => {
