@@ -1,15 +1,27 @@
 /**
  * M2.8 Tier B stream-card hierarchy tests.
  * P1: structural spinner matching (no ● false kills; asterisk/✽/✢ must not leak).
+ * P2: TUI chrome filtering (footers, hotkey bars, prompt rows).
+ * P3: segmentStreamText body/tool segmentation + per-segment rendering.
  */
-import { describe, it } from 'node:test';
+import { describe, it, before } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath } from 'node:url';
 import {
   isSpinnerLine,
   isChromeLine,
   cleanStreamLines,
   diffNewText,
+  segmentStreamText,
 } from '../lib/bubbles.js';
+import { createStateManager } from '../lib/state-manager.js';
+import { mapBubbleToView } from '../public/spa-utils.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const pub = path.join(__dirname, '..', 'public');
 
 describe('M2.8-P1 spinner: real-world lines that MUST be filtered', () => {
   const spinners = [
@@ -137,5 +149,213 @@ describe('M2.8-P2 chrome: content lines that MUST be kept', () => {
     const next =
       [...body, '  Opus 4.8 · pocket-term-2 · ⎇ master* · +963/-90'].join('\n') + '\n';
     assert.deepEqual(diffNewText(prev, next), []);
+  });
+});
+
+describe('M2.8-P3 segmentStreamText (pure)', () => {
+  it('● starts a new body segment; ⎿ rows form a tool sub-segment', () => {
+    const text = [
+      '● 要点一：先跑测试',
+      '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1',
+      '● 要点二：再提交',
+    ].join('\n');
+    assert.deepEqual(segmentStreamText(text), [
+      { type: 'body', text: '● 要点一：先跑测试' },
+      { type: 'tool', text: '  ⎿  $ git -C /root/pocket-term-2 log --oneline -1' },
+      { type: 'body', text: '● 要点二：再提交' },
+    ]);
+  });
+
+  it('2-space hanging indent continues the current body segment (Claude wrap)', () => {
+    const text = ['● 一段很长的正文', '  换行后带两空格悬挂缩进', '  还是正文'].join('\n');
+    assert.deepEqual(segmentStreamText(text), [
+      { type: 'body', text: '● 一段很长的正文\n  换行后带两空格悬挂缩进\n  还是正文' },
+    ]);
+  });
+
+  it('deep indent (≥3 spaces) after body starts a tool sub-segment', () => {
+    const text = ['● 跑了一个命令', '     total 12', '     drwxr-xr-x  4096 .'].join('\n');
+    assert.deepEqual(segmentStreamText(text), [
+      { type: 'body', text: '● 跑了一个命令' },
+      { type: 'tool', text: '     total 12\n     drwxr-xr-x  4096 .' },
+    ]);
+  });
+
+  it('consecutive tool rows (⎿ then indented output) merge into one tool segment', () => {
+    const text = [
+      '● Ran a command',
+      '  ⎿  $ node --test',
+      '     pass 262',
+      '     fail 0',
+    ].join('\n');
+    assert.deepEqual(segmentStreamText(text), [
+      { type: 'body', text: '● Ran a command' },
+      { type: 'tool', text: '  ⎿  $ node --test\n     pass 262\n     fail 0' },
+    ]);
+  });
+
+  it('◆/◈ and indented L rows start tool segments', () => {
+    assert.deepEqual(segmentStreamText('◆ tool call\n● body'), [
+      { type: 'tool', text: '◆ tool call' },
+      { type: 'body', text: '● body' },
+    ]);
+    assert.deepEqual(segmentStreamText('● body\n  L ran ls -la'), [
+      { type: 'body', text: '● body' },
+      { type: 'tool', text: '  L ran ls -la' },
+    ]);
+  });
+
+  it('plain text without markers is a single body segment', () => {
+    assert.deepEqual(segmentStreamText('第一行\n第二行'), [
+      { type: 'body', text: '第一行\n第二行' },
+    ]);
+  });
+
+  it('unindented continuation stays in the current segment', () => {
+    assert.deepEqual(segmentStreamText('● 要点\n继续正文没有缩进'), [
+      { type: 'body', text: '● 要点\n继续正文没有缩进' },
+    ]);
+  });
+
+  it('blank lines are kept inside a segment but trimmed at edges', () => {
+    assert.deepEqual(segmentStreamText('\n● 段落一\n\n段落二\n'), [
+      { type: 'body', text: '● 段落一\n\n段落二' },
+    ]);
+  });
+
+  it('empty / whitespace-only input yields no segments', () => {
+    assert.deepEqual(segmentStreamText(''), []);
+    assert.deepEqual(segmentStreamText('  \n \n'), []);
+    assert.deepEqual(segmentStreamText(null), []);
+  });
+});
+
+describe('M2.8-P3 stream bubbles carry segments end-to-end', () => {
+  it('sealed Tier B stream bubble includes segments; getMessages passes them through', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-m28-p3-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+    const client = {
+      rpc: async () => ({ read: { text: '' } }),
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    try {
+      const paneId = 'w9:p9';
+      mgr._internal.appendTierBLines(
+        paneId,
+        [
+          '● 修复完成，测试全绿。',
+          '  ⎿  $ node --test test/all.test.mjs',
+          '     pass 262',
+        ],
+        1000
+      );
+      mgr._internal.sealOpen(paneId);
+      const rt = mgr._internal.ensureRuntime(paneId);
+      const streamBubbles = rt.buffer.filter((b) => b.stream === true);
+      assert.equal(streamBubbles.length, 1);
+      assert.deepEqual(streamBubbles[0].segments, [
+        { type: 'body', text: '● 修复完成，测试全绿。' },
+        { type: 'tool', text: '  ⎿  $ node --test test/all.test.mjs\n     pass 262' },
+      ]);
+
+      const msgs = await mgr.getMessages(paneId);
+      const streamMsgs = msgs.filter((m) => m.stream === true);
+      assert.equal(streamMsgs.length, 1);
+      assert.deepEqual(streamMsgs[0].segments, streamBubbles[0].segments);
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('draft (unsealed) Tier B bubble from getMessages also carries segments', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-m28-p3b-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+    const client = {
+      rpc: async () => ({ read: { text: '' } }),
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    try {
+      const paneId = 'w9:p10';
+      mgr._internal.appendTierBLines(paneId, ['● 正在写代码', '  ⎿  Edit lib/x.js'], Date.now());
+      const msgs = await mgr.getMessages(paneId);
+      const draft = msgs.find((m) => m.sealed === false);
+      assert.ok(draft, 'expected a draft bubble');
+      assert.deepEqual(draft.segments, [
+        { type: 'body', text: '● 正在写代码' },
+        { type: 'tool', text: '  ⎿  Edit lib/x.js' },
+      ]);
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it('non-stream bubbles (Tier A / user) carry no segments', async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pt2-m28-p3c-'));
+    const stateDir = path.join(tmp, 'state');
+    await fs.mkdir(stateDir);
+    const client = {
+      rpc: async () => ({ read: { text: '' } }),
+      subscribe: () => ({ dead: false, close() {} }),
+    };
+    const mgr = createStateManager({ client, stateDir, allowedRoot: tmp });
+    try {
+      const paneId = 'w9:p11';
+      mgr._internal.pushBubble(paneId, { ts: 1, text: '● looks like a bullet', role: 'agent' });
+      const rt = mgr._internal.ensureRuntime(paneId);
+      assert.equal(rt.buffer[0].segments, undefined);
+    } finally {
+      await mgr.stop();
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('M2.8-P3 per-segment rendering (view model + DOM smoke)', () => {
+  it('mapBubbleToView passes segments through for stream bubbles only', () => {
+    const segs = [
+      { type: 'body', text: '● 要点' },
+      { type: 'tool', text: '  ⎿  cmd' },
+    ];
+    const vm = mapBubbleToView({
+      id: 'x', ts: 1, role: 'agent', stream: true, text: '● 要点\n  ⎿  cmd', segments: segs,
+    });
+    assert.equal(vm.variant, 'stream');
+    assert.deepEqual(vm.segments, segs);
+
+    const vmNoSeg = mapBubbleToView({ id: 'y', ts: 1, role: 'agent', stream: true, text: 'x' });
+    assert.equal(vmNoSeg.segments, null);
+
+    const vmAgent = mapBubbleToView({ id: 'z', ts: 1, role: 'agent', text: 'hi', segments: segs });
+    assert.equal(vmAgent.variant, 'agent');
+    assert.equal(vmAgent.segments, null);
+  });
+
+  it('mapBubbleToView drops malformed segment entries', () => {
+    const vm = mapBubbleToView({
+      id: 'x', ts: 1, role: 'agent', stream: true, text: 't',
+      segments: [{ type: 'body', text: 'ok' }, { type: 'weird', text: 'no' }, 'junk', { type: 'tool' }],
+    });
+    assert.deepEqual(vm.segments, [{ type: 'body', text: 'ok' }]);
+  });
+
+  it('app.js renders stream cards per segment; style.css has theme-aware seg styles', async () => {
+    const appJs = await fs.readFile(path.join(pub, 'app.js'), 'utf8');
+    const css = await fs.readFile(path.join(pub, 'style.css'), 'utf8');
+    // per-segment DOM
+    assert.match(appJs, /stream-seg/);
+    assert.match(appJs, /seg-body/);
+    assert.match(appJs, /seg-tool/);
+    assert.match(appJs, /vm\.segments|\.segments/);
+    // tool sub-segment: smaller, dimmed, left rule; body keeps pre-wrap
+    assert.match(css, /\.stream-seg\s*\{[^}]*white-space:\s*pre-wrap/s);
+    assert.match(css, /\.seg-tool\s*\{[^}]*border-left/s);
+    assert.match(css, /\.seg-tool\s*\{[^}]*var\(--/s);
+    assert.match(css, /\.seg-tool\s*\{[^}]*font-size/s);
   });
 });

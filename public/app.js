@@ -719,6 +719,33 @@ function fillBubbleContent(bubble, text, opts = {}) {
 }
 
 /**
+ * M2.8-P3: fill a Tier B stream card with body/tool hierarchy segments
+ * (computed by the bridge via segmentStreamText). Cards carrying image
+ * tokens keep the Telegram-style image path via fillBubbleContent.
+ * @param {HTMLElement} bubble
+ * @param {{ text: string, mono: boolean, segments: Array<{type:'body'|'tool', text:string}>|null }} vm
+ */
+function fillStreamBubbleContent(bubble, vm) {
+  const text = vm.text || ' ';
+  const hasImage = parseMessageImageSegments(text).some(
+    (s) => s.type === 'image'
+  );
+  if (hasImage || !vm.segments || !vm.segments.length) {
+    fillBubbleContent(bubble, text, { mono: vm.mono });
+    return;
+  }
+  bubble.replaceChildren();
+  for (const seg of vm.segments) {
+    bubble.append(
+      el('div', {
+        className: `stream-seg ${seg.type === 'tool' ? 'seg-tool' : 'seg-body'}`,
+        text: seg.text,
+      })
+    );
+  }
+}
+
+/**
  * Chat attach flow: pick image → upload → preview strip (not path-in-input).
  * @param {File} file
  */
@@ -1323,7 +1350,11 @@ function renderBubbles(paneId) {
       const bubble = el('div', {
         className: `bubble ${vm.variant}`,
       });
-      fillBubbleContent(bubble, vm.text || ' ', { mono: vm.mono });
+      if (vm.variant === 'stream') {
+        fillStreamBubbleContent(bubble, vm);
+      } else {
+        fillBubbleContent(bubble, vm.text || ' ', { mono: vm.mono });
+      }
       row.append(bubble);
       list.append(row);
     }

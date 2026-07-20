@@ -144,6 +144,25 @@ export function paneTitle(pane) {
 }
 
 /**
+ * Sanitize bridge-provided stream hierarchy segments (M2.8-P3).
+ * Keeps only well-formed `{ type: 'body'|'tool', text: string }` entries.
+ * @param {unknown} segments
+ * @returns {Array<{ type: 'body'|'tool', text: string }>|null}
+ */
+export function sanitizeStreamSegments(segments) {
+  if (!Array.isArray(segments)) return null;
+  const out = [];
+  for (const seg of segments) {
+    if (!seg || typeof seg !== 'object') continue;
+    const type = seg.type;
+    if (type !== 'body' && type !== 'tool') continue;
+    if (typeof seg.text !== 'string' || seg.text === '') continue;
+    out.push({ type, text: seg.text });
+  }
+  return out.length ? out : null;
+}
+
+/**
  * Map a message/bubble record to view-model fields for DOM rendering.
  * @param {object} msg
  * @returns {{
@@ -153,6 +172,7 @@ export function paneTitle(pane) {
  *   text: string,
  *   mono: boolean,
  *   ts: number|null,
+ *   segments: Array<{ type: 'body'|'tool', text: string }>|null,
  * }}
  */
 export function mapBubbleToView(msg) {
@@ -167,7 +187,7 @@ export function mapBubbleToView(msg) {
         : null;
 
   if (m.role === 'user') {
-    return { id, side: 'right', variant: 'user', text, mono: false, ts };
+    return { id, side: 'right', variant: 'user', text, mono: false, ts, segments: null };
   }
   if (m.role === 'system' || m.kind === 'tool') {
     return {
@@ -177,18 +197,27 @@ export function mapBubbleToView(msg) {
       text: String(m.summary ?? m.text ?? ''),
       mono: false,
       ts,
+      segments: null,
     };
   }
-  // Tier B stream cards: mono wide bubble
+  // Tier B stream cards: mono wide bubble with body/tool hierarchy segments
   const stream =
     m.stream === true ||
     m.variant === 'stream' ||
     m.mono === true ||
     (m.tier === 'B' && m.role === 'agent');
   if (stream) {
-    return { id, side: 'left', variant: 'stream', text, mono: true, ts };
+    return {
+      id,
+      side: 'left',
+      variant: 'stream',
+      text,
+      mono: true,
+      ts,
+      segments: sanitizeStreamSegments(m.segments),
+    };
   }
-  return { id, side: 'left', variant: 'agent', text, mono: false, ts };
+  return { id, side: 'left', variant: 'agent', text, mono: false, ts, segments: null };
 }
 
 /**
