@@ -11,6 +11,15 @@
  * @param {number} [now]
  * @returns {string}
  */
+/** Return the browser chrome color for each supported theme. */
+export function themeChromeColor(theme) {
+  const value = String(theme || 'dark');
+  if (value === 'light') return '#fffaf3';
+  if (value === 'trae') return '#ffffff';
+  if (value === 'trae-dark') return '#1a1d2a';
+  return '#232136';
+}
+
 export function formatRelativeTime(ts, now = Date.now()) {
   if (ts == null || ts === '') return '';
   let t = typeof ts === 'number' ? ts : Date.parse(String(ts));

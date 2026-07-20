@@ -3,6 +3,7 @@
  */
 import {
   formatRelativeTime,
+  themeChromeColor,
   sortPanes,
   mapBubbleToView,
   agentAvatar,
@@ -391,9 +392,7 @@ function loadSettings() {
   if (ndEl) ndEl.checked = notifyPrefs.done;
   // Keep browser chrome color in sync with the in-app theme toggle.
   const chrome = $('meta[name="theme-color"]:not([media])');
-  if (chrome) {
-    chrome.setAttribute('content', theme === 'light' ? '#fffaf3' : '#232136');
-  }
+  if (chrome) chrome.setAttribute('content', themeChromeColor(theme));
   updateHerdrAbout();
   updateComposerVisibility();
 }

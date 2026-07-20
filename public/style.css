@@ -60,6 +60,73 @@
   color-scheme: light;
 }
 
+/* Optional TRAE canvas theme: additive, reversible, and keeps Rose Pine intact. */
+[data-theme='trae'] {
+  --bg: #f7f7fb;
+  --bg-elev: #ffffff;
+  --bg-chat: #f0f1f7;
+  --fg: #1a1a1f;
+  --fg-muted: #6b6680;
+  --border: #e4e5ef;
+  --divider: #ececf4;
+  --accent: #4e42d2;
+  --bubble-agent: #ffffff;
+  --bubble-user: #4e42d2;
+  --bubble-user-fg: #f5f4ff;
+  --tool-fg: #6b6680;
+  --danger: #e24b4a;
+  --warn: #d89b2c;
+  --ok: #0f9a57;
+  --amber: var(--warn);
+  --red: var(--danger);
+  --blue: #158fca;
+  --idle: #9a96a8;
+  --unknown: #d8d8e2;
+  --blocked-bg: color-mix(in srgb, var(--warn) 14%, transparent);
+  --readonly-bg: #ffffff;
+  --shadow: rgba(30, 28, 60, 0.08);
+  --dim-rgb: 247, 247, 251;
+  --wallpaper-dim: 0.12;
+  --dot-grid: #e2e3ec;
+  color-scheme: light;
+}
+
+[data-theme='trae-dark'] {
+  --bg: #12141c;
+  --bg-elev: #1a1d2a;
+  --bg-chat: #0e1018;
+  --fg: #ececf4;
+  --fg-muted: #9b97ad;
+  --border: #2a2e42;
+  --divider: #22263a;
+  --accent: #8b85f0;
+  --bubble-agent: #1e2233;
+  --bubble-user: #5b52e0;
+  --bubble-user-fg: #f5f4ff;
+  --tool-fg: #8e8aa3;
+  --danger: #f07178;
+  --warn: #e6b450;
+  --ok: #3dd68c;
+  --amber: var(--warn);
+  --red: var(--danger);
+  --blue: #5ec8ff;
+  --idle: #6a6e82;
+  --unknown: #3a3e52;
+  --blocked-bg: color-mix(in srgb, var(--warn) 16%, transparent);
+  --readonly-bg: #1a1d2a;
+  --shadow: rgba(0, 0, 0, 0.45);
+  --dim-rgb: 14, 16, 24;
+  --wallpaper-dim: 0.4;
+  --dot-grid: #252838;
+  color-scheme: dark;
+}
+
+[data-theme='trae'] .bubble-scroll,
+[data-theme='trae-dark'] .bubble-scroll {
+  background-image: radial-gradient(var(--dot-grid) 0.7px, transparent 0.7px);
+  background-size: 16px 16px;
+}
+
 [data-font='sm'] {
   --fs: 14px;
   --fs-sm: 12px;
