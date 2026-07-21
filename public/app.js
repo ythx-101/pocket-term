@@ -58,7 +58,7 @@ import {
   MARKDOWN_MAX_BYTES,
 } from './markdown.js';
 
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '2.0.0';
 const LS_THEME = 'pt2-theme';
 const LS_FONT = 'pt2-font';
 const LS_CONFIRM_SEND = 'pt2-confirm-send';
