@@ -347,6 +347,9 @@ describe('spa static via bridge', () => {
     assert.match(html, /id="btn-wallpaper"/);
     assert.match(html, /id="toggle-confirm-send"/);
     assert.match(html, /id="toggle-local-readonly"/);
+    assert.match(html, /id="paid-group-card"/);
+    assert.match(html, /id="paid-group-qr"/);
+    assert.match(html, /付费群/);
     assert.match(html, /id="herdr-about"/);
     assert.match(html, /app\.js/);
     assert.match(html, /style\.css/);

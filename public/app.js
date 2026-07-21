@@ -26,6 +26,7 @@ import {
   fileAssetUrl,
   parseMessageImageSegments,
   parseMessageAttachmentSegments,
+  isChatUploadImagePath,
   isChatUploadHtmlPath,
   composeImageSendText,
   composeHtmlSendText,
@@ -135,6 +136,8 @@ let dimSaveTimer = null;
 let wallpaperPanelOpen = false;
 /** @type {{ path: string|null, kind?: 'image'|'html' }} pending chat attachment */
 let attachPreview = initialAttachPreview();
+/** @type {{ name: string, price: string, qr_path: string, expires: string }|null} */
+let paidGroupConfig = null;
 /** @type {string|null} currently open fullscreen image src */
 let imageViewerSrc = null;
 /** @type {string|null} currently open Markdown document path */
@@ -357,6 +360,47 @@ function applyWallpaperVisual(s) {
     showToast('壁纸无法加载，已恢复纯色背景', 'warn');
   };
   probe.src = url;
+}
+
+function renderPaidGroup() {
+  const card = $('#paid-group-card');
+  const name = $('#paid-group-name');
+  const price = $('#paid-group-price');
+  const expires = $('#paid-group-expires');
+  const qr = /** @type {HTMLImageElement|null} */ ($('#paid-group-qr'));
+  const button = /** @type {HTMLButtonElement|null} */ ($('#paid-group-qr-button'));
+  if (!card || !name || !price || !expires || !qr || !button) return;
+  if (!paidGroupConfig || !isChatUploadImagePath(paidGroupConfig.qr_path)) {
+    card.classList.add('hidden');
+    card.setAttribute('aria-hidden', 'true');
+    qr.removeAttribute('src');
+    return;
+  }
+  name.textContent = paidGroupConfig.name;
+  price.textContent = `入群费用：¥${paidGroupConfig.price}`;
+  expires.textContent = paidGroupConfig.expires ? `二维码有效期：${paidGroupConfig.expires}` : '请以最新二维码为准';
+  const src = fileAssetUrl(BASE, paidGroupConfig.qr_path);
+  qr.src = src;
+  button.onclick = () => openImageViewer(src);
+  card.classList.remove('hidden');
+  card.removeAttribute('aria-hidden');
+}
+
+async function loadPaidGroup() {
+  try {
+    const res = await fetch(`${BASE}/api/paid-group`, { cache: 'no-store' });
+    const data = await res.json();
+    paidGroupConfig = data?.enabled &&
+      typeof data.name === 'string' &&
+      typeof data.price === 'string' &&
+      typeof data.qr_path === 'string' &&
+      typeof data.expires === 'string'
+      ? { name: data.name, price: data.price, qr_path: data.qr_path, expires: data.expires }
+      : null;
+  } catch {
+    paidGroupConfig = null;
+  }
+  renderPaidGroup();
 }
 
 function loadSettings() {
@@ -2415,6 +2459,7 @@ function wire() {
 
 async function boot() {
   loadSettings();
+  void loadPaidGroup();
   wire();
   if (!location.hash || location.hash === '#') {
     location.replace('#/chats');

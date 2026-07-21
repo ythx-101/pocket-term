@@ -876,6 +876,34 @@ export async function resolveChatUploadFile(
 }
 
 /**
+ * Read the optional runtime paid-group configuration. The QR path is checked
+ * through the same whitelist/realpath checks as GET /herd/api/file.
+ * @param {NodeJS.ProcessEnv|Record<string, unknown>} [env]
+ * @param {string} [fileRoot]
+ * @returns {Promise<{ enabled: false } | { enabled: true, name: string, price: string, qr_path: string, expires: string }>}
+ */
+export async function readPaidGroupConfig(
+  env = process.env,
+  fileRoot = DEFAULT_FILE_SERVE_ROOT
+) {
+  const name = String(env.PT2_PAID_GROUP_NAME ?? '').trim();
+  const price = String(env.PT2_PAID_GROUP_PRICE ?? '').trim();
+  const rawQrPath = String(env.PT2_PAID_GROUP_QR_PATH ?? '').trim();
+  const expires = String(env.PT2_PAID_GROUP_EXPIRES ?? '').trim();
+  if (!name || !price || !rawQrPath || !expires) return { enabled: false };
+
+  const resolved = await resolveChatUploadFile(rawQrPath, fileRoot);
+  if (!resolved.ok || !FILE_IMAGE_EXTS.has(resolved.ext)) return { enabled: false };
+  return {
+    enabled: true,
+    name,
+    price,
+    qr_path: resolved.file,
+    expires,
+  };
+}
+
+/**
  * Resolve a wallpaper file under state/wallpapers with strict basename checks.
  * Rejects traversal (`..`, encoded variants, separators).
  *
@@ -1110,6 +1138,11 @@ export async function startServer(options = {}) {
     // --- API ---
     if (pathname === '/herd/api/state' && (method === 'GET' || method === 'HEAD')) {
       sendJson(res, 200, manager.getState());
+      return;
+    }
+
+    if (pathname === '/herd/api/paid-group' && (method === 'GET' || method === 'HEAD')) {
+      sendJson(res, 200, await readPaidGroupConfig(process.env, fileServeRoot));
       return;
     }
 
