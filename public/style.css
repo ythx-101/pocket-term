@@ -33,6 +33,7 @@
   --idle: #98a2b3;
   --unknown: #98a2b3;
   --blocked-bg: color-mix(in srgb, var(--danger) 18%, transparent);
+  --warning-bg: color-mix(in srgb, var(--warn) 18%, transparent);
   --readonly-bg: #29253a;
   --shadow: rgba(0, 0, 0, 0.42);
   --wallpaper-dim: 0.35;
@@ -66,6 +67,7 @@
   --idle: #5f6673;
   --unknown: #5f6673;
   --blocked-bg: color-mix(in srgb, var(--danger) 12%, transparent);
+  --warning-bg: color-mix(in srgb, var(--warn) 12%, transparent);
   --readonly-bg: #ffffff;
   --shadow: rgba(48, 45, 62, 0.14);
   --dim-rgb: 244, 242, 246;
@@ -328,7 +330,7 @@ html.has-wallpaper .topbar {
 .banner {
   position: relative;
   z-index: 5;
-  background: var(--blocked-bg);
+  background: var(--warning-bg);
   color: var(--warn);
   text-align: center;
   padding: 0.4rem 0.75rem;

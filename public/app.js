@@ -436,7 +436,7 @@ function loadSettings() {
   // Keep browser chrome color in sync with the in-app theme toggle.
   const chrome = $('meta[name="theme-color"]:not([media])');
   if (chrome) {
-    chrome.setAttribute('content', theme === 'light' ? '#fffaf3' : '#232136');
+    chrome.setAttribute('content', theme === 'light' ? '#ffffff' : '#29253a');
   }
   updateHerdrAbout();
   updateComposerVisibility();

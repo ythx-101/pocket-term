@@ -151,6 +151,32 @@ describe('Clear Lavender accessibility and mobile behavior contracts', () => {
     assert.match(css, /transition:\s*none\s*!important/);
   });
 
+  it('sets browser chrome theme colors to Clear Lavender surfaces', () => {
+    assert.match(
+      html,
+      /<meta name="theme-color" content="#29253a" media="\(prefers-color-scheme: dark\)" \/>/
+    );
+    assert.match(
+      html,
+      /<meta name="theme-color" content="#ffffff" media="\(prefers-color-scheme: light\)" \/>/
+    );
+    assert.match(html, /<meta name="theme-color" content="#29253a" \/>/);
+    assert.match(appJs, /chrome\.setAttribute\('content', theme === 'light' \? '#ffffff' : '#29253a'\);/);
+    assert.doesNotMatch(html, /#232136|#fffaf3/);
+    assert.doesNotMatch(appJs, /#232136|#fffaf3/);
+  });
+
+  it('keeps warning banner backgrounds separate from danger blocked bars', () => {
+    const dark = varsFrom(themeBlock(css, "[data-theme='dark']"));
+    const light = varsFrom(themeBlock(css, "[data-theme='light']"));
+    assert.equal(dark['--warning-bg'], 'color-mix(in srgb, var(--warn) 18%, transparent)');
+    assert.equal(light['--warning-bg'], 'color-mix(in srgb, var(--warn) 12%, transparent)');
+    assert.equal(dark['--blocked-bg'], 'color-mix(in srgb, var(--danger) 18%, transparent)');
+    assert.equal(light['--blocked-bg'], 'color-mix(in srgb, var(--danger) 12%, transparent)');
+    assert.match(css, /\.banner\s*\{[^}]*background:\s*var\(--warning-bg\);[^}]*color:\s*var\(--warn\);/s);
+    assert.match(css, /\.blocked-bar\s*\{[^}]*background:\s*var\(--blocked-bg\);[^}]*color:\s*var\(--danger\);/s);
+  });
+
   it('unifies working/blocked wording and exposes row status names accessibly', () => {
     assert.doesNotMatch(appJs, /进行中/);
     assert.match(appJs, /\[工作中\]/);
