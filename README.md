@@ -43,8 +43,7 @@ bash scripts/install.sh --port 7690
                                              ├─ GET  /herd/api/events          (SSE)
                                              ├─ POST /herd/api/seen/:id
                                              ├─ POST /herd/api/upload?target=chat
-                                             ├─ GET  /herd/api/file?path=
-                                             └─ GET  /herd/api/paid-group
+                                             └─ GET  /herd/api/file?path=
                                              │
                                              ▼
                                         herdr.sock
@@ -66,7 +65,6 @@ bash scripts/install.sh --port 7690
 | POST | `/herd/api/seen/:id` | 标记 pane 已读，只写入 `state/last-seen.json` |
 | POST | `/herd/api/upload?target=chat` | 同源限制的图片、Markdown、HTML 上传 |
 | GET/HEAD | `/herd/api/file?path=` | 白名单文件读取；Markdown 使用 `text/plain` |
-| GET | `/herd/api/paid-group` | 运行时付费群展示配置 |
 | GET | `/herd/api/push/vapid-public` | Web Push 公钥，未配置时返回 503 |
 | POST | `/herd/api/push/subscribe` | 注册同源浏览器订阅 |
 | DELETE | `/herd/api/push/subscribe` | 删除同源浏览器订阅 |
@@ -84,12 +82,6 @@ bash scripts/install.sh --port 7690
 | `PT2_FILE_SERVE_ROOT` | `/srv/term-uploads` | 文件读取白名单根目录 |
 | `PT2_READONLY` | 未设置 | `1` / `true` 启用只读熔断 |
 | `PT2_VAPID_SUBJECT` / `PUBLIC_KEY` / `PRIVATE_KEY` | 未设置 | Web Push，三项必须同时存在 |
-| `PT2_PAID_GROUP_NAME` | 未设置 | 付费群展示名称 |
-| `PT2_PAID_GROUP_PRICE` | 未设置 | 付费群价格文本 |
-| `PT2_PAID_GROUP_QR_PATH` | 未设置 | 白名单根目录内的二维码图片路径 |
-| `PT2_PAID_GROUP_EXPIRES` | 未设置 | 页面展示的二维码有效期 |
-
-付费群四项变量缺一项时，接口返回 `enabled: false`，页面隐藏入口。二维码必须位于文件读取白名单下，并通过现有图片扩展名、realpath 和 symlink 检查。
 
 ## 本地运行
 

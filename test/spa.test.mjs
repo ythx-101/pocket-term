@@ -347,12 +347,33 @@ describe('spa static via bridge', () => {
     assert.match(html, /id="btn-wallpaper"/);
     assert.match(html, /id="toggle-confirm-send"/);
     assert.match(html, /id="toggle-local-readonly"/);
-    assert.match(html, /id="paid-group-card"/);
-    assert.match(html, /id="paid-group-qr"/);
-    assert.match(html, /付费群/);
+    assert.equal(html.includes(['paid', 'group'].join('-')), false);
+    assert.equal(html.includes('\u4ed8\u8d39\u7fa4'), false);
     assert.match(html, /id="herdr-about"/);
     assert.match(html, /app\.js/);
     assert.match(html, /style\.css/);
+  });
+
+  it('removed optional group surface, runtime markers, and endpoint stay absent', async () => {
+    const [html, css, appJs, serverSource, readme] = await Promise.all([
+      fetch(`${base}/herd/`).then((res) => res.text()),
+      fetch(`${base}/herd/style.css`).then((res) => res.text()),
+      fetch(`${base}/herd/app.js`).then((res) => res.text()),
+      fs.readFile(path.join(__dirname, '..', 'server.js'), 'utf8'),
+      fs.readFile(path.join(__dirname, '..', 'README.md'), 'utf8'),
+    ]);
+    const forbidden = [
+      ['paid', 'group'].join('-'),
+      ['PT2', 'PAID', 'GROUP'].join('_'),
+      '\u4ed8\u8d39\u7fa4',
+      '\u7b54\u7591\u7fa4',
+    ];
+    for (const source of [html, css, appJs, serverSource, readme]) {
+      for (const marker of forbidden) assert.equal(source.includes(marker), false);
+    }
+    const removedPath = `/herd/api/${['paid', 'group'].join('-')}`;
+    const removed = await fetch(`${base}${removedPath}`);
+    assert.equal(removed.status, 404);
   });
 
   it('GET /herd/ composer is Telegram-style (field wrap, attach inside, icon send)', async () => {
