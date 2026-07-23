@@ -1008,26 +1008,27 @@ body.image-viewer-open .toast-host {
   padding: 0.3rem 0.55rem 0.4rem;
   padding-bottom: max(0.4rem, env(safe-area-inset-bottom, 0px));
 }
-/* Quick-keys stay secondary but meet a 36px mobile target. */
+/* Quick-keys: lighter / smaller so the input row dominates. */
 .hotkey-bar {
   display: flex;
-  gap: 0.35rem;
-  padding: 0.05rem 0.1rem 0.35rem;
+  gap: 0.3rem;
+  padding: 0.05rem 0.1rem 0.28rem;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  opacity: 0.72;
 }
 .hotkey-btn {
   appearance: none;
   flex-shrink: 0;
-  border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 70%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
   color: var(--fg-muted);
   font: inherit;
   font-size: calc(var(--fs-sm) * 0.9);
   border-radius: 999px;
-  /* Secondary convenience keys; primary composer controls keep 44px targets. */
-  min-height: 36px;
-  padding: 0 0.55rem;
+  /* Compact convenience keys; primary composer controls keep 44px targets. */
+  min-height: 28px;
+  padding: 0 0.4rem;
   cursor: pointer;
   opacity: 0.9;
 }

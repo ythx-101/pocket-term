@@ -30,7 +30,7 @@ describe('M2.7-P4 visual consistency', () => {
     assert.match(css, /\.bubble-empty\s*\{/);
   });
 
-  it('primary touch targets are at least 44px; quick keys stay secondary at 36px', () => {
+  it('primary touch targets are at least 44px; quick keys restore the compact 28px treatment', () => {
     for (const sel of [
       '.blocked-confirm-btn',
       '.add-wallpaper-btn',
@@ -43,8 +43,8 @@ describe('M2.7-P4 visual consistency', () => {
       );
       assert.match(css, re, `${sel} must be ≥44px`);
     }
-    assert.match(css, /\.hotkey-btn\s*\{[^}]*min-height:\s*36px/s);
-    assert.match(css, /\.hotkey-btn[\s\S]*padding:\s*0 0\.55rem/);
+    assert.match(css, /\.hotkey-btn\s*\{[^}]*min-height:\s*28px/s);
+    assert.match(css, /\.hotkey-btn[\s\S]*padding:\s*0 0\.4rem/);
   });
 
   it('wallpaper dim scrim is theme-aware (not always black)', () => {

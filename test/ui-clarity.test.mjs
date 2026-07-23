@@ -194,13 +194,14 @@ describe('Clear Lavender accessibility and mobile behavior contracts', () => {
     for (const [, attrs] of tabIcons) assert.match(attrs, /aria-hidden="true"/);
   });
 
-  it('keeps primary controls 44px while quick keys are at least 36px and secondary', () => {
+  it('keeps primary controls 44px while quick keys retain the intentionally compact 28px style', () => {
     for (const sel of ['.blocked-confirm-btn', '.add-wallpaper-btn', '.attach-btn', '.push-enable-btn']) {
       assert.match(css, new RegExp(`${sel.replace('.', '\\.')}\\s*\\{[^}]*min-height:\\s*44px`, 's'));
     }
     assert.match(css, /\.send-btn\s*\{[^}]*min-height:\s*44px/s);
     assert.match(css, /\.tab\s*\{[^}]*min-height:\s*52px/s);
-    assert.match(css, /\.hotkey-btn\s*\{[^}]*min-height:\s*36px/s);
+    assert.match(css, /\.hotkey-bar\s*\{[^}]*gap:\s*0\.3rem[^}]*padding:\s*0\.05rem 0\.1rem 0\.28rem[^}]*opacity:\s*0\.72/s);
+    assert.match(css, /\.hotkey-btn\s*\{[^}]*min-height:\s*28px[^}]*padding:\s*0 0\.4rem/s);
     assert.match(css, /\.hotkey-btn\s*\{[^}]*font-size:\s*calc\(var\(--fs-sm\) \* 0\.9\)/s);
   });
 

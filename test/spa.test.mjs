@@ -384,9 +384,9 @@ describe('spa static via bridge', () => {
     assert.match(css, /\.send-btn[\s\S]*border-radius:\s*50%/);
     assert.match(css, /\.composer-field[\s\S]*border-radius:\s*22px/);
     assert.match(css, /\.attach-btn[\s\S]*border:\s*none/);
-    assert.doesNotMatch(css, /\.hotkey-bar[\s\S]*opacity:\s*0\.72/);
-    assert.match(css, /\.hotkey-btn[\s\S]*min-height:\s*36px/);
-    assert.match(css, /\.hotkey-btn[\s\S]*padding:\s*0 0\.55rem/);
+    assert.match(css, /\.hotkey-bar[\s\S]*opacity:\s*0\.72/);
+    assert.match(css, /\.hotkey-btn[\s\S]*min-height:\s*28px/);
+    assert.match(css, /\.hotkey-btn[\s\S]*padding:\s*0 0\.4rem/);
   });
 
   it('static assets have correct Content-Type', async () => {
