@@ -47,7 +47,8 @@ describe('M2.7-P3 wiring: list left + chat header', () => {
     assert.match(spaUtils, /export function statusLabel/);
     assert.match(appJs, /statusLabel/);
     assert.match(appJs, /row-badge/);
-    assert.match(appJs, /\[进行中\]/);
+    assert.match(appJs, /\[工作中\]/);
+    assert.doesNotMatch(appJs, /进行中/);
     assert.match(appJs, /\[等你回复\]/);
     assert.doesNotMatch(appJs, /row-status-label/);
     // List badges are explicit Chinese text; the header still uses statusLabel.

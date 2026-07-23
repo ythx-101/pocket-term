@@ -97,7 +97,7 @@
         <button type="button" id="btn-jump-bottom" class="jump-bottom hidden">
           ↓ 新消息
         </button>
-        <footer id="composer" class="composer hidden">
+        <footer id="composer" class="composer hidden" aria-label="消息输入区">
           <div class="hotkey-bar" role="toolbar" aria-label="快捷键">
             <button type="button" class="hotkey-btn" data-hotkey="esc">Esc</button>
             <button type="button" class="hotkey-btn" data-hotkey="ctrl-c">
@@ -154,6 +154,7 @@
                 enterkeyhint="enter"
                 autocomplete="off"
                 autocapitalize="sentences"
+                aria-label="发给 agent"
               ></textarea>
             </div>
             <button
@@ -415,17 +416,17 @@
       <nav id="tab-bar" class="tab-bar" aria-label="主导航">
         <a href="#/chats" class="tab" data-tab="chats">
           <span class="tab-icon-wrap">
-            <span class="tab-icon">💬</span>
+            <span class="tab-icon" aria-hidden="true">💬</span>
             <span id="tab-badge-chats" class="tab-badge hidden" aria-hidden="true"></span>
           </span>
           <span>会话</span>
         </a>
         <a href="#/contacts" class="tab" data-tab="contacts">
-          <span class="tab-icon">📒</span>
+          <span class="tab-icon" aria-hidden="true">📒</span>
           <span>通讯录</span>
         </a>
         <a href="#/me" class="tab" data-tab="me">
-          <span class="tab-icon">👤</span>
+          <span class="tab-icon" aria-hidden="true">👤</span>
           <span>我</span>
         </a>
       </nav>

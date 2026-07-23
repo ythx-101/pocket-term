@@ -1637,6 +1637,7 @@ function renderChatList() {
       className: paneRowClass(p),
       href: `#/chat/${encodeURIComponent(p.pane_id)}`,
       role: 'listitem',
+      'aria-label': `${title}，状态：${st.label}${p.unread ? '，未读' : ''}`,
     });
     const avatar = el('div', {
       className: 'avatar',
@@ -1659,7 +1660,7 @@ function renderChatList() {
       );
     } else if (p.agent_status === 'working') {
       summary.append(
-        el('span', { className: 'row-badge working', text: '[进行中]' })
+        el('span', { className: 'row-badge working', text: '[工作中]' })
       );
     }
     summary.append(document.createTextNode(p.summary || '暂无摘要'));

@@ -1,62 +1,74 @@
-/* pocket-term-2 SPA — mobile-first, rose-pine / LED palette */
+/* pocket-term-2 SPA — mobile-first, Clear Lavender palette */
 
+/* Surface hierarchy:
+   --bg = canvas/list base, --bg-elev = rows/cards/bubbles,
+   --bg-chrome = topbar/composer/tab/dialog chrome, --bg-chat = chat canvas.
+   Status colors are textual AA tokens; dots/borders are supplemental cues. */
 :root,
 [data-theme='dark'] {
-  --bg: #1a1824;
-  --bg-elev: #232136;
-  --bg-chat: #14121d;
-  --fg: #e0def4;
-  --fg-muted: #908caa;
-  --border: #393552;
-  --divider: #2a2740;
-  --accent: #c4a7e7;
-  --bubble-agent: #2e2b45;
-  --bubble-user: #3eb575;
-  --bubble-user-fg: #06130b;
-  --tool-fg: #6e6a86;
-  --danger: #eb6f92;
-  --warn: #f6c177;
-  --ok: #4cc38a;
+  --bg: #15131d;
+  --bg-elev: #201d2b;
+  --bg-chrome: #29253a;
+  --bg-chat: #100e16;
+  --fg: #f3f0ff;
+  --fg-muted: #b3adc8;
+  --border: #4b465f;
+  --divider: #353044;
+  --accent: #b99aed;
+  --accent-fg: #1b1228;
+  --focus-ring: var(--accent);
+  --bubble-agent: #242033;
+  --bubble-user: #4ad295;
+  --bubble-user-fg: #04130b;
+  --tool-fg: #b3adc8;
+  --danger: #fb7185;
+  --danger-fg: #1b1228;
+  --warn: #f5b942;
+  --ok: #4ad295;
   /* --amber/--red alias --warn/--danger (single source of truth) */
   --amber: var(--warn);
   --red: var(--danger);
   /* done vs idle: blue brighter/cooler, idle neutral gray (12px dots distinguishable) */
-  --blue: #5eb8f0;
-  --idle: #6a7280;
-  --unknown: #3a3a48;
-  --blocked-bg: color-mix(in srgb, var(--warn) 18%, transparent);
-  --readonly-bg: #2a273f;
-  --shadow: rgba(0, 0, 0, 0.35);
+  --blue: #64a9f5;
+  --idle: #98a2b3;
+  --unknown: #98a2b3;
+  --blocked-bg: color-mix(in srgb, var(--danger) 18%, transparent);
+  --readonly-bg: #29253a;
+  --shadow: rgba(0, 0, 0, 0.42);
   --wallpaper-dim: 0.35;
   --dim-rgb: 0, 0, 0;
   color-scheme: dark;
 }
 
 [data-theme='light'] {
-  --bg: #faf4ed;
-  --bg-elev: #fffaf3;
-  --bg-chat: #ede4da;
-  --fg: #575279;
-  --fg-muted: #9893a5;
-  --border: #dfdad9;
-  --divider: #eae4e2;
-  --accent: #907aa9;
+  --bg: #f4f2f6;
+  --bg-elev: #ffffff;
+  --bg-chrome: #ffffff;
+  --bg-chat: #ece8f0;
+  --fg: #302d3e;
+  --fg-muted: #676273;
+  --border: #c8c3cd;
+  --divider: #e2dee5;
+  --accent: #6f4d93;
+  --accent-fg: #ffffff;
+  --focus-ring: var(--accent);
   --bubble-agent: #ffffff;
-  --bubble-user: #95ec69;
+  --bubble-user: #bceaa6;
   --bubble-user-fg: #10240c;
-  --tool-fg: #9893a5;
-  --danger: #b4637a;
-  --warn: #ea9d34;
-  --ok: #286983;
+  --tool-fg: #676273;
+  --danger: #a52f4d;
+  --danger-fg: #ffffff;
+  --warn: #8a5700;
+  --ok: #176b46;
   --amber: var(--warn);
   --red: var(--danger);
-  --blue: #2d7a9a;
-  --idle: #a8a29e;
-  --unknown: #cecacd;
-  --blocked-bg: color-mix(in srgb, var(--warn) 15%, transparent);
-  --readonly-bg: #fffaf3;
-  --shadow: rgba(87, 82, 121, 0.12);
-  --dim-rgb: 250, 244, 237;
+  --blue: #245f9e;
+  --idle: #5f6673;
+  --unknown: #5f6673;
+  --blocked-bg: color-mix(in srgb, var(--danger) 12%, transparent);
+  --readonly-bg: #ffffff;
+  --shadow: rgba(48, 45, 62, 0.14);
+  --dim-rgb: 244, 242, 246;
   color-scheme: light;
 }
 
@@ -153,22 +165,25 @@ html.has-wallpaper .settings {
   background: transparent;
 }
 html.has-wallpaper .row {
-  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  background: color-mix(in srgb, var(--bg-elev) 90%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 html.has-wallpaper .row:active {
-  background: color-mix(in srgb, var(--bg-elev) 85%, transparent);
+  background: color-mix(in srgb, var(--bg-chrome) 94%, transparent);
 }
 html.has-wallpaper .group-head {
-  background: color-mix(in srgb, var(--bg-elev) 78%, transparent);
+  background: color-mix(in srgb, var(--bg-chrome) 90%, transparent);
 }
 html.has-wallpaper .settings-group {
-  background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
   backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 /* Bubble readability on bright wallpapers */
 html.has-wallpaper .bubble.agent,
 html.has-wallpaper .bubble.stream {
-  background: color-mix(in srgb, var(--bubble-agent) 88%, #000 12%);
+  background: color-mix(in srgb, var(--bubble-agent) 94%, var(--bg-chat) 6%);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   box-shadow: 0 1px 3px var(--shadow), 0 0 0 1px color-mix(in srgb, var(--border) 60%, transparent);
@@ -177,13 +192,13 @@ html.has-wallpaper .bubble.user {
   box-shadow: 0 1px 3px var(--shadow);
 }
 html.has-wallpaper .time-chip {
-  background: color-mix(in srgb, var(--bg-elev) 70%, transparent);
+  background: color-mix(in srgb, var(--bg-elev) 88%, transparent);
   backdrop-filter: blur(6px);
   border-radius: 999px;
   padding: 0.15rem 0.55rem;
 }
 html.has-wallpaper .topbar {
-  background: color-mix(in srgb, var(--bg-elev) 82%, transparent);
+  background: color-mix(in srgb, var(--bg-chrome) 92%, transparent);
 }
 
 .view {
@@ -207,6 +222,16 @@ html.has-wallpaper .topbar {
   overscroll-behavior: contain;
 }
 
+:focus-visible {
+  outline: 2px solid var(--focus-ring, var(--accent));
+  outline-offset: 2px;
+}
+
+.composer-input:focus-visible,
+.toggle-row input[type='checkbox']:focus-visible {
+  outline-offset: 3px;
+}
+
 /* —— top bar —— */
 .topbar {
   display: flex;
@@ -215,8 +240,9 @@ html.has-wallpaper .topbar {
   min-height: 52px;
   padding: 0.5rem 0.75rem;
   padding-top: max(0.5rem, env(safe-area-inset-top, 0px));
-  background: color-mix(in srgb, var(--bg-elev) 92%, transparent);
+  background: color-mix(in srgb, var(--bg-chrome) 96%, transparent);
   backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
@@ -335,7 +361,14 @@ html.has-wallpaper .topbar {
   cursor: pointer;
   text-decoration: none;
   color: inherit;
-  background: var(--bg);
+  background: var(--bg-elev);
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 32%, transparent);
+}
+.row.row-unread .row-title {
+  font-weight: 700;
+}
+.row.row-unread {
+  box-shadow: inset 3px 0 0 0 var(--blue);
 }
 /* WeChat-style inset divider: starts after the avatar */
 .row::after {
@@ -350,15 +383,15 @@ html.has-wallpaper .topbar {
   border-bottom: none;
 }
 .row:active {
-  background: var(--bg-elev);
+  background: var(--bg-chrome);
 }
 /* blocked: red left-edge bar (WeChat @ style) — pin via sort */
 .row.row-blocked {
   box-shadow: inset 3px 0 0 0 var(--danger);
-  background: color-mix(in srgb, var(--danger) 6%, var(--bg));
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-elev));
 }
 .row.row-blocked:active {
-  background: color-mix(in srgb, var(--danger) 10%, var(--bg-elev));
+  background: color-mix(in srgb, var(--danger) 12%, var(--bg-chrome));
 }
 
 .avatar {
@@ -550,7 +583,7 @@ html.has-wallpaper .topbar {
   gap: 0.65rem;
   flex-wrap: wrap;
   background: var(--blocked-bg);
-  color: var(--warn);
+  color: var(--danger);
   text-align: center;
   padding: 0.4rem 0.65rem;
   font-size: var(--fs-sm);
@@ -559,8 +592,8 @@ html.has-wallpaper .topbar {
 }
 .blocked-confirm-btn {
   appearance: none;
-  border: 1px solid var(--warn);
-  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  border: 1px solid var(--danger);
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
   color: var(--fg);
   font: inherit;
   font-size: var(--fs-sm);
@@ -916,7 +949,7 @@ body.image-viewer-open .toast-host {
   border-radius: 50%;
   border: none;
   background: var(--danger);
-  color: #fff;
+  color: var(--danger-fg);
   font-size: 0.9rem;
   line-height: 1;
   cursor: pointer;
@@ -968,32 +1001,31 @@ body.image-viewer-open .toast-host {
 .composer {
   flex-shrink: 0;
   z-index: 3;
-  background: var(--bg-elev);
+  background: var(--bg-chrome);
   border-top: 1px solid var(--border);
   padding: 0.3rem 0.55rem 0.4rem;
   padding-bottom: max(0.4rem, env(safe-area-inset-bottom, 0px));
 }
-/* Quick-keys: lighter / smaller so the input row dominates */
+/* Quick-keys stay secondary but meet a 36px mobile target. */
 .hotkey-bar {
   display: flex;
-  gap: 0.3rem;
-  padding: 0.05rem 0.1rem 0.28rem;
+  gap: 0.35rem;
+  padding: 0.05rem 0.1rem 0.35rem;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  opacity: 0.72;
 }
 .hotkey-btn {
   appearance: none;
   flex-shrink: 0;
-  border: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-  background: color-mix(in srgb, var(--bg) 45%, transparent);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
   color: var(--fg-muted);
   font: inherit;
   font-size: calc(var(--fs-sm) * 0.9);
   border-radius: 999px;
-  /* Compact convenience keys; primary composer controls keep 44px targets. */
-  min-height: 28px;
-  padding: 0 0.4rem;
+  /* Secondary convenience keys; primary composer controls keep 44px targets. */
+  min-height: 36px;
+  padding: 0 0.55rem;
   cursor: pointer;
   opacity: 0.9;
 }
@@ -1015,10 +1047,12 @@ body.image-viewer-open .toast-host {
   border-radius: 22px;
   background: var(--bg);
   min-height: 44px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--bg-chrome) 35%, transparent);
   padding: 0 0.45rem 0 0.1rem;
 }
 .composer-field:focus-within {
-  border-color: var(--accent);
+  border-color: var(--focus-ring, var(--accent));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--focus-ring, var(--accent)) 34%, transparent);
 }
 .attach-btn {
   appearance: none;
@@ -1082,13 +1116,13 @@ body.image-viewer-open .toast-host {
 .composer-input:focus {
   outline: none;
 }
-/* Circular send: accent fill + white paper-plane */
+/* Circular send: accent fill + contrast-checked paper-plane */
 .send-btn {
   appearance: none;
   flex-shrink: 0;
   border: none;
   background: var(--accent);
-  color: #fff;
+  color: var(--accent-fg);
   font: inherit;
   border-radius: 50%;
   width: 44px;
@@ -1136,7 +1170,7 @@ body.chat-open .toast-host {
 }
 .toast {
   pointer-events: none;
-  background: color-mix(in srgb, var(--bg-elev) 92%, #000);
+  background: color-mix(in srgb, var(--bg-chrome) 94%, #000);
   color: var(--fg);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -1175,6 +1209,7 @@ body.chat-open .toast-host {
 .settings-group {
   background: var(--bg-elev);
   border: 1px solid var(--border);
+  box-shadow: 0 1px 6px var(--shadow);
   border-radius: 12px;
   padding: 0.85rem 1rem;
   margin-bottom: 0.75rem;
@@ -1245,7 +1280,9 @@ body.chat-open .toast-host {
 .seg-btn.active {
   border-color: var(--accent);
   color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg));
+  box-shadow: inset 0 -3px 0 var(--accent);
+  font-weight: 700;
 }
 .wallpaper-card {
   width: 100%;
@@ -1496,8 +1533,9 @@ body.chat-open .toast-host {
   z-index: 6;
   display: flex;
   border-top: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elev) 95%, transparent);
+  background: color-mix(in srgb, var(--bg-chrome) 96%, transparent);
   backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   padding-bottom: env(safe-area-inset-bottom, 0);
   flex-shrink: 0;
 }
@@ -1516,9 +1554,21 @@ body.chat-open .toast-host {
   text-decoration: none;
   color: var(--fg-muted);
   font-size: var(--fs-sm);
+  position: relative;
 }
 .tab.active {
   color: var(--accent);
+  font-weight: 700;
+}
+.tab.active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 32%;
+  right: 32%;
+  height: 3px;
+  border-radius: 0 0 999px 999px;
+  background: var(--accent);
 }
 .tab-icon {
   font-size: 1.15rem;
@@ -1538,7 +1588,7 @@ body.chat-open .toast-host {
   padding: 0 4px;
   border-radius: 999px;
   background: var(--danger);
-  color: #fff;
+  color: var(--danger-fg);
   font-size: 10px;
   line-height: 16px;
   text-align: center;
@@ -1596,6 +1646,24 @@ body.chat-open #tab-bar {
 /* Chat page: wallpaper layer uses chat-tinted base when no image */
 body.chat-open #wallpaper {
   background-color: var(--bg-chat);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+
+  .st-working,
+  .chat-status-label.st-working,
+  .typing-line,
+  .empty.loading::before,
+  .toast {
+    animation: none !important;
+  }
 }
 
 /* Markdown attachment cards and safe mobile preview */
